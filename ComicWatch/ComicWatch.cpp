@@ -179,9 +179,9 @@ void apply_snapshot(const WorkerSnapshot& snapshot) {
     g_state.imageCount = snapshot.imageCount;
     g_state.imageIndex = snapshot.imageIndex;
     g_state.currentImage = snapshot.currentImage;
-    g_state.statusMessage = snapshot.statusMessage;
-    g_state.currentFolder = snapshot.currentFolder;
-	g_state.currentZipPath = snapshot.currentFilePath;
+    g_state.statusMessage = std::move(snapshot.statusMessage);
+    g_state.currentFolder = std::move(snapshot.currentFolder);
+	g_state.currentZipPath = std::move(snapshot.currentFilePath);
 }
 
 void reset_wheel_state() {
@@ -195,9 +195,10 @@ bool ui_open_by_dialog(HWND hWnd) {
     if (selected.empty()) return false;
 
 	auto result = OpenPath(selected);
-    bool ok = result.success;
+    if (result == nullptr) return false;
+    bool ok = result->success;
     if (ok) {
-		apply_snapshot(result.snapshot);
+		apply_snapshot(result->snapshot);
         InvalidateRect(hWnd, nullptr, FALSE);
         reset_wheel_state();
     }
@@ -206,9 +207,10 @@ bool ui_open_by_dialog(HWND hWnd) {
 
 bool ui_show_next_image(HWND hWnd) {
 	auto result = ShowNextImage();
-    bool ok = result.success;
+	if (result == nullptr) return false;
+    bool ok = result->success;
     if (ok) {
-		apply_snapshot(result.snapshot);
+		apply_snapshot(result->snapshot);
         InvalidateRect(hWnd, nullptr, FALSE);
     }
     return ok;
@@ -216,9 +218,10 @@ bool ui_show_next_image(HWND hWnd) {
 
 bool ui_show_prev_image(HWND hWnd) {
 	auto result = ShowPrevImage();
-    bool ok = result.success;
+	if (result == nullptr) return false;
+    bool ok = result->success;
     if (ok) {
-		apply_snapshot(result.snapshot);
+		apply_snapshot(result->snapshot);
         InvalidateRect(hWnd, nullptr, FALSE);
     }
     return ok;
@@ -226,9 +229,10 @@ bool ui_show_prev_image(HWND hWnd) {
 
 void ui_show_next_zip(HWND hWnd) {
 	auto result = ShowNextZip();
-	bool ok = result.success;
+	if (result == nullptr) return;
+	bool ok = result->success;
     if (ok) {
-        apply_snapshot(result.snapshot);
+        apply_snapshot(result->snapshot);
         reset_wheel_state();
 		InvalidateRect(hWnd, nullptr, FALSE);
     }
@@ -236,9 +240,10 @@ void ui_show_next_zip(HWND hWnd) {
 
 void ui_show_prev_zip(HWND hWnd) {
 	auto result = ShowPrevZip();
-	bool ok = result.success;
+	if (result == nullptr) return;
+	bool ok = result->success;
     if (ok) {
-        apply_snapshot(result.snapshot);
+        apply_snapshot(result->snapshot);
         reset_wheel_state();
 		InvalidateRect(hWnd, nullptr, FALSE);
     }
@@ -246,9 +251,10 @@ void ui_show_prev_zip(HWND hWnd) {
 
 void ui_delete_current_zip(HWND hWnd) {
 	auto result = DeleteCurrentFile();
-	bool ok = result.success;
+	if (result == nullptr) return;
+	bool ok = result->success;
     if (ok) {
-        apply_snapshot(result.snapshot);
+        apply_snapshot(result->snapshot);
         reset_wheel_state();
 		InvalidateRect(hWnd, nullptr, FALSE);
 	}

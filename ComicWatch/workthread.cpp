@@ -722,36 +722,36 @@ void delete_current_folder() {
 
 void CheckPreloadCacheNeedClear();
 void PreloadNeighbors();
-WorkerResult OpenPath(const std::wstring& filePath) {
+std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
     if (filePath.ends_with(L".zip")) {
-        return g_messageThread.send([filePath] -> WorkerResult {
+        return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
             mode = FileMode_Zip;
-            WorkerResult result;
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
             fs::path selectedPath(filePath);
             std::wstring folder = selectedPath.parent_path().wstring();
             scan_zip_files_in_folder(folder);
             auto it = std::find(g_worker.zipFiles.begin(), g_worker.zipFiles.end(), selectedPath.wstring());
             if (it != g_worker.zipFiles.end()) {
                 int selectedIndex = (int)std::distance(g_worker.zipFiles.begin(), it);
-                result.success = open_zip_at(selectedIndex);
-                if (!result.success) {
+                result->success = open_zip_at(selectedIndex);
+                if (!result->success) {
                     if (!open_zip_by_step(selectedIndex + 1, 1)) {
-                        result.success = open_zip_by_step(selectedIndex - 1, -1);
+                        result->success = open_zip_by_step(selectedIndex - 1, -1);
                     }
                     else {
-                        result.success = true;
+                        result->success = true;
                     }
                 }
             }
-            fill_snapshot(result.snapshot);
+            fill_snapshot(result->snapshot);
             PreloadNeighbors();
             return result;
             });
     }
     else {
-        return g_messageThread.send([filePath] -> WorkerResult {
+        return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
             mode = FileMode_Folder;
-            WorkerResult result;
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
             fs::path selectedPath(filePath);
             std::wstring folder = selectedPath.parent_path().wstring();
             scan_images_in_folder(folder);
@@ -761,118 +761,117 @@ WorkerResult OpenPath(const std::wstring& filePath) {
                 if (it != g_fileWorker.imageFiles.end()) {
                     g_fileWorker.imageIndex = (int)std::distance(g_fileWorker.imageFiles.begin(), it);
                 }
-                result.success = load_current_image_file();
+                result->success = load_current_image_file();
             }
             else {
-                result.success = false;
+                result->success = false;
                 g_fileWorker.statusMessage = L"当前文件夹内无图片文件:\n" + folder;
             }
-            fill_snapshot(result.snapshot);
+            fill_snapshot(result->snapshot);
             PreloadNeighbors();
             return result;
 			});
     }
 }
-WorkerResult ShowNextImage() {
+std::shared_ptr<WorkerResult> ShowNextImage() {
     if (mode == FileMode_Zip) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
-            result.success = show_next_image();
-            fill_snapshot(result.snapshot);
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+            result->success = show_next_image();
+            fill_snapshot(result->snapshot);
             CheckPreloadCacheNeedClear();
             PreloadNeighbors();
             return result;
             });
     }
     else if(mode== FileMode_Folder) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
-            result.success = show_next_image_file();
-            fill_snapshot(result.snapshot);
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+            result->success = show_next_image_file();
+            fill_snapshot(result->snapshot);
             CheckPreloadCacheNeedClear();
             PreloadNeighbors();
             return result;
             });
     }
-	return WorkerResult{};
+	return nullptr;
 }
-WorkerResult ShowPrevImage() {
+std::shared_ptr<WorkerResult> ShowPrevImage() {
     if (mode == FileMode_Zip) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
-            result.success = show_prev_image();
-            fill_snapshot(result.snapshot);
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+            result->success = show_prev_image();
+            fill_snapshot(result->snapshot);
             CheckPreloadCacheNeedClear();
             PreloadNeighbors();
             return result;
             });
 	}
 	else if (mode == FileMode_Folder) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
-            result.success = show_prev_image_file();
-            fill_snapshot(result.snapshot);
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+            result->success = show_prev_image_file();
+            fill_snapshot(result->snapshot);
             CheckPreloadCacheNeedClear();
             PreloadNeighbors();
             return result;
             });
     }
-	return WorkerResult{};
+	return nullptr;
 }
-WorkerResult ShowNextZip() {
+std::shared_ptr<WorkerResult> ShowNextZip() {
     if (mode == FileMode_Zip) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
             if (!g_worker.zipFiles.empty()) {
-                result.success = open_zip_by_step(g_worker.zipIndex + 1, 1);
+                result->success = open_zip_by_step(g_worker.zipIndex + 1, 1);
             }
-            fill_snapshot(result.snapshot);
-
+            fill_snapshot(result->snapshot);
             return result;
             });
     }
-	return WorkerResult{};
+	return nullptr;
 }
-WorkerResult ShowPrevZip() {
+std::shared_ptr<WorkerResult> ShowPrevZip() {
     if (mode == FileMode_Zip) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
             if (!g_worker.zipFiles.empty()) {
-                result.success = open_zip_by_step(g_worker.zipIndex - 1, -1);
+                result->success = open_zip_by_step(g_worker.zipIndex - 1, -1);
             }
-            fill_snapshot(result.snapshot);
+            fill_snapshot(result->snapshot);
             return result;
             });
     }
-	return WorkerResult{};
+	return nullptr;
 }
-WorkerResult DeleteCurrentFile() {
+std::shared_ptr<WorkerResult> DeleteCurrentFile() {
     if (mode == FileMode_Zip) {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
             delete_current_zip();
-            result.success = true;
-            fill_snapshot(result.snapshot);
+            result->success = true;
+            fill_snapshot(result->snapshot);
             return result;
             });
     }
     else if (mode == FileMode_Folder)
     {
-        return g_messageThread.send([]() -> WorkerResult {
-            WorkerResult result;
+        return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
             delete_current_folder();
-            result.success = true;
-            fill_snapshot(result.snapshot);
+            result->success = true;
+            fill_snapshot(result->snapshot);
             return result;
             });
     }
-	return WorkerResult{};
+	return nullptr;
 }
-WorkerResult GetSnapshot() {
-    return g_messageThread.send([]() -> WorkerResult {
-        WorkerResult result;
-        result.success = true;
-        fill_snapshot(result.snapshot);
+std::shared_ptr<WorkerResult> GetSnapshot() {
+    return g_messageThread.send([]() -> std::shared_ptr<WorkerResult> {
+        std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+        result->success = true;
+        fill_snapshot(result->snapshot);
         return result;
         });
 }

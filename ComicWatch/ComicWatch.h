@@ -19,9 +19,6 @@ struct WorkerSnapshot {
     std::wstring statusMessage;
     std::wstring currentFolder;
 	std::wstring currentFilePath;
-    WorkerSnapshot(WorkerSnapshot&& state) = default;
-	WorkerSnapshot() = default;
-    WorkerSnapshot& operator=(WorkerSnapshot&&) = default;
 };
 
 struct WorkerResult {
@@ -30,13 +27,13 @@ struct WorkerResult {
 };
 
 
-WorkerResult OpenPath(const std::wstring& zipPath);
-WorkerResult ShowNextImage();
-WorkerResult ShowPrevImage();
-WorkerResult ShowNextZip();
-WorkerResult ShowPrevZip();
-WorkerResult DeleteCurrentFile();
-WorkerResult GetSnapshot();
+std::shared_ptr<WorkerResult> OpenPath(const std::wstring& zipPath);
+std::shared_ptr<WorkerResult> ShowNextImage();
+std::shared_ptr<WorkerResult> ShowPrevImage();
+std::shared_ptr<WorkerResult> ShowNextZip();
+std::shared_ptr<WorkerResult> ShowPrevZip();
+std::shared_ptr<WorkerResult> DeleteCurrentFile();
+std::shared_ptr<WorkerResult> GetSnapshot();
 
 void dbgprintf(const char* format, ...);
 void dbgprintf(const wchar_t* format, ...);
