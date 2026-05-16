@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="ComicWatch\\ComicWatch.vcxproj" Id="0fbca543-91bb-431b-83dc-74eac5da5c7d" />
+  <Project Path="ComicWatch/ComicWatch.vcxproj" Id="0fbca543-91bb-431b-83dc-74eac5da5c7d" />
 </Solution>

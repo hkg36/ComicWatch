@@ -11,6 +11,13 @@
 #include <shellapi.h>
 #include <cwctype>
 #include <miniz.h>
+#ifdef _DEBUG
+#pragma comment(lib, "opencv_world4120d.lib")
+#pragma comment(lib, "minizd.lib")
+#else
+#pragma comment(lib, "opencv_world4120.lib")
+#pragma comment(lib, "miniz.lib")
+#endif
 #include "MessageThread.h"
 
 MessageThread g_messageThread;

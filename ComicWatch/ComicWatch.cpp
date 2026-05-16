@@ -459,7 +459,7 @@ void paint_image(HWND hWnd, HDC hdc) {
         DeleteDC(memDC);
 		});
 
-    HBRUSH whiteBrush = (HBRUSH)GetStockObject(LTGRAY_BRUSH);
+    HBRUSH whiteBrush = (HBRUSH)GetStockObject(DKGRAY_BRUSH);
     FillRect(memDC, &rc, whiteBrush);
     HFONT hFont = CreateFontW(
         26, 0, 0, 0,
