@@ -62,7 +62,6 @@ struct AppState {
 
     ULONGLONG wheelBurstStartTick = 0;
     ULONGLONG wheelLastFlipTick = 0;
-    ULONGLONG suppressMouseFlipUntilTick = 0;
     bool wasMaximized = false;
 } g_state;
 struct Config {
@@ -187,7 +186,6 @@ void apply_snapshot(const WorkerSnapshot& snapshot) {
 void reset_wheel_state() {
     g_state.wheelBurstStartTick = 0;
     g_state.wheelLastFlipTick = 0;
-    g_state.suppressMouseFlipUntilTick = GetTickCount64() + 300;
 }
 
 bool ui_open_by_dialog(HWND hWnd) {
@@ -592,13 +590,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_LBUTTONUP:
-        if (GetTickCount64() >= g_state.suppressMouseFlipUntilTick) {
-            if (g_state.fileCount == 0) {
-                ui_open_by_dialog(hWnd);
-            }
-            else {
-                ui_show_next_image(hWnd);
-            }
+        if (g_state.fileCount == 0) {
+            ui_open_by_dialog(hWnd);
         }
         break;
 
@@ -626,10 +619,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_MOUSEWHEEL:
     {
-        if (GetTickCount64() >= g_state.suppressMouseFlipUntilTick) {
-            int wheelDelta = (int)(short)HIWORD(wParam);
-            handle_mouse_wheel(hWnd, wheelDelta);
-        }
+        int wheelDelta = (int)(short)HIWORD(wParam);
+        handle_mouse_wheel(hWnd, wheelDelta);
     }
     break;
 

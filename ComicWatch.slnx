@@ -3,5 +3,6 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Project Path="ComicOcr/ComicOcr.vcxproj" Id="b16907e3-f301-4c64-a3dd-f9740d4e5318" />
   <Project Path="ComicWatch/ComicWatch.vcxproj" Id="0fbca543-91bb-431b-83dc-74eac5da5c7d" />
 </Solution>
