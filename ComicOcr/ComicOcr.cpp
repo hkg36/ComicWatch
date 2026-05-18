@@ -187,6 +187,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_DESTROY:
         UnregisterHotKey(hWnd, HOTKEY_TOGGLE_WINDOW);
+		UnregisterHotKey(hWnd, HOTKEY_REPLAY);
         RemoveTrayIcon();
         PostQuitMessage(0);
         break;
