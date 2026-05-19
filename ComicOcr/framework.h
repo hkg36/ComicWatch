@@ -14,3 +14,21 @@
 #include <memory.h>
 #include <tchar.h>
 #include <iostream>
+#include <vector>
+#include <opencv2/opencv.hpp>
+
+class DeferHelper {
+public:
+    DeferHelper(std::function<void()> func) : func_(func) {}
+    ~DeferHelper() { if (func_) func_(); }
+private:
+    std::function<void()> func_;
+};
+
+// 宏定义：利用 __LINE__ 生成唯一的变量名
+#define TOKENPASTE(x, y) x ## y
+#define TOKENPASTE2(x, y) TOKENPASTE(x, y)
+#define defer(func) DeferHelper TOKENPASTE2(defer_dummy_, __LINE__)([&](){ func; })
+
+void dbgprintf(const char* format, ...);
+void dbgprintf(const wchar_t* format, ...);

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -123,6 +123,7 @@
     <Manifest>
       <EnableDpiAwareness>true</EnableDpiAwareness>
     </Manifest>
+    <ResourceCompile />
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -155,11 +156,10 @@
     <ClCompile Include="workthread.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="ComicWatch.rc" />
+    <Image Include="ComicWatch.ico" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="ComicWatch.ico" />
-    <Image Include="small.ico" />
+    <ResourceCompile Include="ComicWatch.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

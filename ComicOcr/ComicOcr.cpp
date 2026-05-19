@@ -4,12 +4,40 @@
 #include "framework.h"
 #include "ComicOcr.h"
 #include <shellapi.h>
+#include <windowsx.h>
+#include <algorithm>
+#include "ScreenShot.h"
 
 #define MAX_LOADSTRING 100
 
 constexpr UINT WMAPP_TRAYICON = WM_APP + 1;
 constexpr UINT HOTKEY_TOGGLE_WINDOW = 1;
 constexpr UINT HOTKEY_REPLAY = 2;
+constexpr UINT DRAG_CAPTURE_TIMER_ID = 1;
+constexpr UINT DRAG_CAPTURE_DELAY_MS = 500;
+
+void dbgprintf(const char* format, ...)
+{
+#ifdef _DEBUG
+	char buffer[1024];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(buffer, sizeof(buffer), format, args);
+	va_end(args);
+	OutputDebugStringA(buffer);
+#endif
+}
+void dbgprintf(const wchar_t* format, ...)
+{
+#ifdef _DEBUG
+	wchar_t buffer[1024];
+	va_list args;
+	va_start(args, format);
+	vswprintf(buffer, sizeof(buffer) / sizeof(wchar_t), format, args);
+	va_end(args);
+	OutputDebugStringW(buffer);
+#endif
+}
 
 // 全局变量:
 HINSTANCE hInst;                                // 当前实例
@@ -18,6 +46,10 @@ WCHAR szWindowClass[MAX_LOADSTRING];            // 主窗口类名
 HWND g_hMainWnd = nullptr;
 BOOL g_isWindowVisible = FALSE;
 NOTIFYICONDATA g_trayIconData = {};
+BOOL g_isDragging = FALSE;
+BOOL g_hasDragRect = FALSE;
+POINT g_dragStartPoint = {};
+POINT g_dragCurrentPoint = {};
 
 // 此代码模块中包含的函数的前向声明:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -29,6 +61,9 @@ BOOL AddTrayIcon(HWND hWnd);
 void RemoveTrayIcon();
 void ToggleMainWindow();
 void ShowTrayMenu(HWND hWnd);
+void Paint(HWND hWnd, HDC hdc);
+RECT GetNormalizedDragRect();
+void SaveDragRect();
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -91,7 +126,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
     wcex.lpszMenuName   = NULL;
     wcex.lpszClassName  = szWindowClass;
-    wcex.hIconSm        = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
+    wcex.hIconSm = wcex.hIcon;
 
     return RegisterClassExW(&wcex);
 }
@@ -124,11 +159,11 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
        return FALSE;
    }
 
-   if (!RegisterHotKey(hWnd, HOTKEY_TOGGLE_WINDOW, MOD_ALT, 'W')) // Alt+W 切换窗口显示/隐藏
+   if (!RegisterHotKey(hWnd, HOTKEY_TOGGLE_WINDOW, MOD_ALT, 'Q')) // Alt+Q 切换窗口显示/隐藏
    {
 	   std::cout << "Failed to register hotkey: " << GetLastError() << std::endl;
    }
-   if (!RegisterHotKey(hWnd, HOTKEY_REPLAY, MOD_ALT, 'Q')) // Alt+Q 重新播放
+   if (!RegisterHotKey(hWnd, HOTKEY_REPLAY, MOD_ALT, 'W')) // Alt+W 重新播放
    {
 	   std::cout << "Failed to register hotkey: " << GetLastError() << std::endl;
    }
@@ -140,6 +175,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message)
     {
+    case WM_ERASEBKGND:
+        return 1;
     case WM_COMMAND:
         {
             int wmId = LOWORD(wParam);
@@ -168,29 +205,74 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
         }
         break;
-    case WMAPP_TRAYICON:
-        if (lParam == WM_RBUTTONUP)
-        {
-            ShowTrayMenu(hWnd);
-        }
-        else if (lParam == WM_LBUTTONDBLCLK)
-        {
-            ToggleMainWindow();
-        }
-        return 0;
-    case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-            BeginPaint(hWnd, &ps);
-            EndPaint(hWnd, &ps);
-        }
-        break;
-    case WM_DESTROY:
-        UnregisterHotKey(hWnd, HOTKEY_TOGGLE_WINDOW);
+	case WMAPP_TRAYICON:
+		if (lParam == WM_RBUTTONUP)
+		{
+			ShowTrayMenu(hWnd);
+		}
+		else if (lParam == WM_LBUTTONDBLCLK)
+		{
+			ToggleMainWindow();
+		}
+		return 0;
+	case WM_LBUTTONDOWN:
+		if (g_isWindowVisible)
+		{
+			SetCapture(hWnd);
+			g_isDragging = TRUE;
+			g_hasDragRect = FALSE;
+			g_dragStartPoint.x = GET_X_LPARAM(lParam);
+			g_dragStartPoint.y = GET_Y_LPARAM(lParam);
+			g_dragCurrentPoint = g_dragStartPoint;
+		}
+		return 0;
+	case WM_MOUSEMOVE:
+		if (g_isDragging)
+		{
+			g_dragCurrentPoint.x = GET_X_LPARAM(lParam);
+			g_dragCurrentPoint.y = GET_Y_LPARAM(lParam);
+			g_hasDragRect = TRUE;
+			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+			SetTimer(hWnd, DRAG_CAPTURE_TIMER_ID, DRAG_CAPTURE_DELAY_MS, nullptr);
+			InvalidateRect(hWnd, nullptr, FALSE);
+		}
+		return 0;
+	case WM_LBUTTONUP:
+		if (g_isDragging)
+		{
+			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+			ReleaseCapture();
+			g_isDragging = FALSE;
+			g_hasDragRect = FALSE;
+			ToggleMainWindow();
+		}
+		return 0;
+	case WM_TIMER:
+		if (wParam == DRAG_CAPTURE_TIMER_ID && g_isDragging && g_hasDragRect)
+		{
+			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+			SaveDragRect();
+		}
+		return 0;
+	case WM_PAINT:
+		{
+			PAINTSTRUCT ps;
+			HDC dc=BeginPaint(hWnd, &ps);
+			Paint(hWnd, dc);
+			EndPaint(hWnd, &ps);
+		}
+		break;
+	case WM_DESTROY:
+		KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+		if (GetCapture() == hWnd)
+		{
+			ReleaseCapture();
+		}
+		UnregisterHotKey(hWnd, HOTKEY_TOGGLE_WINDOW);
 		UnregisterHotKey(hWnd, HOTKEY_REPLAY);
-        RemoveTrayIcon();
-        PostQuitMessage(0);
-        break;
+		RemoveTrayIcon();
+		PostQuitMessage(0);
+		break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
@@ -220,25 +302,37 @@ void RemoveTrayIcon()
         g_trayIconData.hIcon = nullptr;
     }
 }
-
+Screenshot screenshot;
 void ToggleMainWindow()
 {
-    if (!g_hMainWnd)
-    {
-        return;
-    }
+	if (!g_hMainWnd)
+	{
+		return;
+	}
 
-    if (g_isWindowVisible)
-    {
-        ShowWindow(g_hMainWnd, SW_HIDE);
-        g_isWindowVisible = FALSE;
-    }
-    else
-    {
-        ShowWindow(g_hMainWnd, SW_SHOW);
-        SetForegroundWindow(g_hMainWnd);
-        g_isWindowVisible = TRUE;
-    }
+	if (g_isWindowVisible)
+	{
+		KillTimer(g_hMainWnd, DRAG_CAPTURE_TIMER_ID);
+		if (GetCapture() == g_hMainWnd)
+		{
+			ReleaseCapture();
+		}
+		g_isDragging = FALSE;
+		g_hasDragRect = FALSE;
+		screenshot.release();
+		ShowWindow(g_hMainWnd, SW_HIDE);
+		g_isWindowVisible = FALSE;
+	}
+	else
+	{
+		screenshot.getScreenshot(); // 切换到显示窗口时获取屏幕截图
+		g_isDragging = FALSE;
+		g_hasDragRect = FALSE;
+		ShowWindow(g_hMainWnd, SW_SHOW);
+		SetForegroundWindow(g_hMainWnd);
+		InvalidateRect(g_hMainWnd, nullptr, FALSE);
+		g_isWindowVisible = TRUE;
+	}
 }
 
 void ShowTrayMenu(HWND hWnd)
@@ -260,4 +354,92 @@ void ShowTrayMenu(HWND hWnd)
     PostMessage(hWnd, WM_NULL, 0, 0);//TrackPopupMenu 是模态的，它会阻塞直到菜单消失。但有时菜单消失后，窗口的激活状态或消息队列会有点“卡住”。发一个 WM_NULL（空消息）可以让消息循环继续运转
 
     DestroyMenu(hMenu);
+}
+
+RECT GetNormalizedDragRect()
+{
+	RECT rect{};
+	rect.left = std::min(g_dragStartPoint.x, g_dragCurrentPoint.x);
+	rect.top = std::min(g_dragStartPoint.y, g_dragCurrentPoint.y);
+	rect.right = std::max(g_dragStartPoint.x, g_dragCurrentPoint.x);
+	rect.bottom = std::max(g_dragStartPoint.y, g_dragCurrentPoint.y);
+	return rect;
+}
+
+void SaveDragRect()
+{
+	cv::Mat img = screenshot.getImgBuffer();
+	if (img.empty())
+	{
+		return;
+	}
+
+	RECT rect = GetNormalizedDragRect();
+	int x = std::max(0, static_cast<int>(rect.left));
+	int y = std::max(0, static_cast<int>(rect.top));
+	int right = std::min(img.cols, static_cast<int>(rect.right));
+	int bottom = std::min(img.rows, static_cast<int>(rect.bottom));
+	int width = right - x;
+	int height = bottom - y;
+
+	if (width <= 0 || height <= 0)
+	{
+		return;
+	}
+
+	cv::Mat cut = img(cv::Rect(x, y, width, height));
+	//cv::imwrite("cut.webp", cut);
+}
+
+void Paint(HWND hWnd, HDC hdc)
+{
+	cv::Mat img = screenshot.getImgBuffer();
+	if (img.empty())
+	{
+		return;
+	}
+
+	cv::Size imgSize = img.size();
+
+	//截图绘制到窗口
+	HDC memDC = CreateCompatibleDC(hdc);
+	HBITMAP hBitmap = CreateCompatibleBitmap(hdc, imgSize.width, imgSize.height);
+	HGDIOBJ oldBitmap = SelectObject(memDC, hBitmap);
+	defer({
+		SelectObject(memDC, oldBitmap);
+		DeleteObject(hBitmap);
+		DeleteDC(memDC);
+		});
+
+	BITMAPINFO bmi{};
+	bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+	bmi.bmiHeader.biWidth = imgSize.width;
+	bmi.bmiHeader.biHeight = -imgSize.height;
+	bmi.bmiHeader.biPlanes = 1;
+	bmi.bmiHeader.biBitCount = 32;
+	bmi.bmiHeader.biCompression = BI_RGB;
+
+	SetDIBitsToDevice(memDC,
+		0, 0,
+		imgSize.width, imgSize.height,
+		0, 0,
+		0,
+		imgSize.height,
+		img.data,
+		&bmi,
+		DIB_RGB_COLORS);
+
+	if (g_isDragging && g_hasDragRect)
+	{
+		RECT rect = GetNormalizedDragRect();
+		HPEN pen = CreatePen(PS_DASH, 1, RGB(255, 0, 0));
+		HGDIOBJ oldPen = SelectObject(memDC, pen);
+		HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(HOLLOW_BRUSH));
+		Rectangle(memDC, rect.left, rect.top, rect.right, rect.bottom);
+		SelectObject(memDC, oldBrush);
+		SelectObject(memDC, oldPen);
+		DeleteObject(pen);
+	}
+
+	BitBlt(hdc, 0, 0, imgSize.width, imgSize.height, memDC, 0, 0, SRCCOPY);
 }

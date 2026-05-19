@@ -7,7 +7,6 @@
 #define IDS_APP_TITLE                   103
 #define IDM_ABOUT                       104
 #define IDI_COMICOCR                    107
-#define IDI_SMALL                       108
 #define IDC_COMICOCR                    109
 #define IDR_MAINFRAME                   128
 #define IDM_TRAY_TOGGLE                 32771

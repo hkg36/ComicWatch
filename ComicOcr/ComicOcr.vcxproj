@@ -70,6 +70,14 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <IncludePath>D:\Scoop\apps\zlib\current\include;D:\Scoop\apps\openssl\current\include;D:\Scoop\apps\opencv\current\include;D:\VS_Link\cpplibs\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\Scoop\apps\opencv\current\x64\vc16\lib;D:\Scoop\apps\zlib\current\lib;D:\Scoop\apps\openssl\current\lib\VC\x64\MTd;D:\VS_Link\cpplibs\lib;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <IncludePath>D:\Scoop\apps\zlib\current\include;D:\Scoop\apps\openssl\current\include;D:\Scoop\apps\opencv\current\include;D:\VS_Link\cpplibs\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\Scoop\apps\opencv\current\x64\vc16\lib;D:\Scoop\apps\zlib\current\lib;D:\Scoop\apps\openssl\current\lib\VC\x64\MTd;D:\VS_Link\cpplibs\lib;$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -143,17 +151,18 @@
     <ClInclude Include="ComicOcr.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="Resource.h" />
+    <ClInclude Include="ScreenShot.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ComicOcr.cpp" />
+    <ClCompile Include="ScreenShot.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="ComicOcr.rc" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="ComicOcr.ico" />
-    <Image Include="small.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
