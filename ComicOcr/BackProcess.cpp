@@ -10,13 +10,13 @@
 #include <mmsystem.h>
 #include <fkYAML/node.hpp>
 
-class OpenAIClient {
+class AliTransClient {
 private:
     std::string api_key;
     const std::string site = "https://dashscope.aliyuncs.com";
     const std::string url = "/compatible-mode/v1";
 public:
-    OpenAIClient() {}
+    AliTransClient() {}
 
     void set_api_key(const std::string& key) {
         api_key = key;
@@ -130,7 +130,7 @@ float voicevox_speed_scale = 1.0f;
 
 httplib::Client ocr_client("");
 httplib::Client voicevox_client("");
-OpenAIClient ali_client;
+AliTransClient ali_client;
 bool load_backprocess_config() {
     try {
         auto yamlPath = get_yaml_path();
@@ -301,23 +301,22 @@ std::string translate_with_ali(
         {"translation_options", translation_options}
     };
 
-    std::string result_text = ali_client.chat_completions_create(
+    std::string translated_text = ali_client.chat_completions_create(
         "qwen-mt-flash",      // 或你想用的模型
         messages,
         extra_body
     );
-	auto result_json = nlohmann::json::parse(result_text);
-	auto translated_text = result_json["choices"][0]["message"]["content"];
     return translated_text;
 }
 
+template<typename T>
 class RecentCache {
 private:
-    std::deque<std::pair<std::string, std::string>> items;
+    std::deque<std::pair<std::basic_string<T>, std::basic_string<T>>> items;
     const size_t max_size = 3;
 
 public:
-    void put(std::string key, std::string value) {
+    void put(std::basic_string<T> key, std::basic_string<T> value) {
         auto it = std::find_if(items.begin(), items.end(),
             [&](const auto& p) { return p.first == key; });
 
@@ -332,7 +331,7 @@ public:
         }
     }
 
-    std::optional<std::string> get(const std::string& key) {
+    std::optional<std::basic_string<T>> get(const std::basic_string<T>& key) {
         auto it = std::find_if(items.begin(), items.end(),
             [&](const auto& p) { return p.first == key; });
 
@@ -351,7 +350,27 @@ public:
 
     size_t size() const { return items.size(); }
 
-    const std::deque<std::pair<std::string, std::string>>& getAll() const {
+    const std::deque<std::pair<std::basic_string<T>, std::basic_string<T>>>& getAll() const {
         return items;
     }
 };
+
+RecentCache<wchar_t> translation_cache;
+void start_translation(HWND hWnd,std::wstring text) {
+	workthread.post([hWnd, text = std::move(text)] {
+		std::string utf8_text = wstring_to_utf8(text);
+		std::string translated = translate_with_ali(utf8_text);
+		std::wstring w_translated = utf8_to_wstring(translated);
+		translation_cache.put(text, w_translated);
+		auto msg = std::make_unique<std::wstring>(std::move(w_translated));
+		if (PostMessage(hWnd, WM_USER_TRANSFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
+			msg.release();
+		}
+		});
+}
+std::wstring check_translation_cache(std::wstring text) {
+	return workthread.send([text = std::move(text)] -> std::wstring {
+		auto w_translated = translation_cache.get(text);
+		return w_translated ? *w_translated : std::wstring();
+		});
+}

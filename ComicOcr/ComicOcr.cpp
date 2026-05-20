@@ -62,11 +62,27 @@ void Paint(HWND hWnd, HDC hdc);
 RECT GetNormalizedDragRect();
 void SaveDragRect();
 
+bool SingleInstance()
+{
+	// 1. 创建一个唯一的 Mutex
+	HANDLE hMutex = ::CreateMutex(NULL, FALSE, _T("Global\\ComicOcrSingleInstance"));
+	// 2. 检查是否已经存在
+	if (GetLastError() == ERROR_ALREADY_EXISTS)
+	{
+		if (hMutex)
+			CloseHandle(hMutex);
+		return false; // 退出当前实例
+	}
+	return true;
+}
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
                      _In_ LPWSTR    lpCmdLine,
                      _In_ int       nCmdShow)
 {
+	if (SingleInstance() == false) {
+		return 0;
+	}
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 	load_backprocess_config();
@@ -231,6 +247,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			g_dragCurrentPoint.y = GET_Y_LPARAM(lParam);
 			g_hasDragRect = TRUE;
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+			KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
 			SetTimer(hWnd, DRAG_CAPTURE_TIMER_ID, DRAG_CAPTURE_DELAY_MS, nullptr);
 			InvalidateRect(hWnd, nullptr, FALSE);
 		}
@@ -239,6 +256,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (g_isDragging)
 		{
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+			KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
 			ReleaseCapture();
 			g_isDragging = FALSE;
 			g_hasDragRect = FALSE;
@@ -251,6 +269,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
 			SaveDragRect();
 		}
+		if (wParam == START_TRANSLATE_DELAY_ID)
+		{
+			KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
+			if (!ocr_result.empty()) {
+				start_translation(hWnd, ocr_result);
+			}
+		}
 		return 0;
 	case WM_PAINT:
 		{
@@ -262,6 +287,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_DESTROY:
 		KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
+		KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
 		if (GetCapture() == hWnd)
 		{
 			ReleaseCapture();
@@ -276,6 +302,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		std::unique_ptr<std::wstring> msg(
 			reinterpret_cast<std::wstring*>(lParam));
 		ocr_result = std::move(*msg);
+		auto cache_result = check_translation_cache(ocr_result);
+		if (!cache_result.empty()) {
+			trans_result = cache_result;
+			dbgprintf(L"Translation cache hit for text: %s\n", ocr_result.c_str());
+		} else {
+			SetTimer(hWnd, START_TRANSLATE_DELAY_ID, START_TRANS_DELAY_MS, nullptr);
+		}
+		InvalidateRect(hWnd, nullptr, FALSE);
+		}
+		break;
+	case WM_USER_TRANSFINISH: 
+		{
+		std::unique_ptr<std::wstring> msg(
+			reinterpret_cast<std::wstring*>(lParam));
+		trans_result = std::move(*msg);
 		InvalidateRect(hWnd, nullptr, FALSE);
 		}
 		break;
@@ -319,6 +360,7 @@ void ToggleMainWindow()
 	if (g_isWindowVisible)
 	{
 		KillTimer(g_hMainWnd, DRAG_CAPTURE_TIMER_ID);
+		KillTimer(g_hMainWnd, START_TRANSLATE_DELAY_ID);
 		if (GetCapture() == g_hMainWnd)
 		{
 			ReleaseCapture();
@@ -394,7 +436,7 @@ void SaveDragRect()
 	int width = right - x;
 	int height = bottom - y;
 
-	if (width <= 0 || height <= 0)
+	if (width <= 10 || height <= 10)
 	{
 		return;
 	}
@@ -492,6 +534,18 @@ void Paint(HWND hWnd, HDC hdc)
 			
 			FillRect(memDC, &textRc, blackBrush);
 			DrawTextW(memDC, ocr_result.c_str(), -1, &textRc, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
+
+			if (!trans_result.empty()) {
+				RECT transTextRc{ textX, textRc.bottom + 5, textX + textMaxWidth, textRc.bottom + 5 + textMaxHeight };
+				int transHeight = DrawTextW(memDC,
+					trans_result.c_str(),
+					-1,
+					&transTextRc,
+					DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
+
+				FillRect(memDC, &transTextRc, blackBrush);
+				DrawTextW(memDC, trans_result.c_str(), -1, &transTextRc, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
+			}
 		}
 	}
 
