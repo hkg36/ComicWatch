@@ -1,0 +1,290 @@
+#include "framework.h"
+#include "../ComicWatch/MessageThread.h"
+#include <iostream>
+#define OPENSSL_SUPPRESS_DEPRECATED
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#define CPPHTTPLIB_ZLIB_SUPPORT
+#include <httplib.h>
+#include <zip.h>
+#include <json.hpp>
+#include <mmsystem.h>
+#include <fkYAML/node.hpp>
+
+class OpenAIClient {
+private:
+    std::string api_key;
+    const std::string site = "https://dashscope.aliyuncs.com";
+    const std::string url = "/compatible-mode/v1";
+public:
+    OpenAIClient() {}
+
+    void set_api_key(const std::string& key) {
+        api_key = key;
+    }
+
+    // 类似 Python 的 client.chat.completions.create
+    std::string chat_completions_create(
+        const std::string& model,
+        const nlohmann::json& messages,
+        const nlohmann::json& extra_body = nlohmann::json::object()
+    ) {
+        if (api_key.empty()) {
+            throw std::runtime_error("API key not set");
+        }
+
+        httplib::Client cli(site);
+        cli.set_read_timeout(60, 0);   // 60秒超时
+        cli.set_write_timeout(60, 0);
+
+        nlohmann::json body = {
+            {"model", model},
+            {"messages", messages}
+        };
+
+        // 合并 extra_body（例如 translation_options）
+        if (!extra_body.empty()) {
+            for (auto& [key, value] : extra_body.items()) {
+                body[key] = value;
+            }
+        }
+
+        httplib::Headers headers = {
+            {"Authorization", "Bearer " + api_key},
+            {"Content-Type", "application/json"}
+        };
+
+        auto res = cli.Post(url + "/chat/completions", headers, body.dump(), "application/json");
+
+        if (!res || res->status != 200) {
+            std::string err = "HTTP error: ";
+            if (res) err += std::to_string(res->status) + " " + res->body;
+            else err += "No response";
+            std::cout << err << std::endl;
+            throw std::runtime_error(err);
+        }
+
+        nlohmann::json response = nlohmann::json::parse(res->body);
+
+        // 提取 content
+        if (response.contains("choices") &&
+            response["choices"].is_array() &&
+            !response["choices"].empty() &&
+            response["choices"][0].contains("message") &&
+            response["choices"][0]["message"].contains("content")) {
+
+            return response["choices"][0]["message"]["content"].get<std::string>();
+        }
+
+        throw std::runtime_error("Invalid response format");
+    }
+};
+
+MessageThread workthread;
+namespace fs = std::filesystem;
+std::wstring get_yaml_path() {
+    WCHAR exePath[MAX_PATH]{};
+    DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return L"ComicWatch.yaml";
+    fs::path iniPath(exePath);
+    iniPath.replace_extension(L".yaml");
+    return iniPath.wstring();
+}
+std::string wstring_to_utf8(const std::wstring& wstr)
+{
+    if (wstr.empty()) return {};
+
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+        static_cast<int>(wstr.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0) return {};
+
+    std::string utf8(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+        static_cast<int>(wstr.size()),
+        &utf8[0], size_needed, nullptr, nullptr);
+    return utf8;
+}
+bool SplitUrlToOriginAndPath(const std::string& url, std::string& origin, std::string& path) {
+	size_t scheme_end = url.find("://");
+	if (scheme_end == std::string::npos) {
+		return false; // 无效的URL
+	}
+	size_t host_start = scheme_end + 3;
+	size_t path_start = url.find('/', host_start);
+	if (path_start == std::string::npos) {
+        origin = url;
+		path = "/";
+	}
+	else {
+        origin = url.substr(0, path_start);
+		path = url.substr(path_start);
+	}
+	return true;
+}
+std::string ali_key;
+std::string ocr_origin;
+std::string ocr_path;
+std::string voicevox_server_url;
+std::string voicevox_speaker_id="20";
+std::string voicevox_speed_scale = "1.0";
+
+httplib::Client ocr_client("");
+httplib::Client voicevox_client("");
+OpenAIClient ali_client;
+bool load_backprocess_config() {
+    try {
+        auto yamlPath = get_yaml_path();
+
+        fs::path path(yamlPath);
+        std::ifstream file(path, std::ios::binary);
+
+        // 2. 检查文件是否成功打开
+        if (!file.is_open()) {
+            dbgprintf(L"无法打开配置文件！路径: %s\n", yamlPath.c_str());
+            return false;
+        }
+
+        auto node = fkyaml::node::deserialize(file);
+        file.close();
+
+        auto& keyNode = node["key"];
+        ali_key = keyNode["ali_key"].get_value<std::string>();
+        auto& ocrNode = node["ocr"];
+        auto ocr_server_url = ocrNode["server_url"].get_value<std::string>();
+        SplitUrlToOriginAndPath(ocr_server_url, ocr_origin, ocr_path);
+        auto& voicevoxNode = node["voicevox"];
+        voicevox_server_url = voicevoxNode["src"].get_value<std::string>();
+        voicevox_speaker_id = voicevoxNode["speaker_id"].get_value<std::string>();
+        voicevox_speed_scale = voicevoxNode["speed_scale"].get_value<std::string>();
+
+        ocr_client = httplib::Client(ocr_origin);
+        voicevox_client = httplib::Client(voicevox_server_url);
+        ali_client.set_api_key(ali_key);
+        return true;
+	}
+    catch (const std::exception& ex) {
+		std::string msg = std::string("config load error: ") + ex.what();
+        MessageBoxA(nullptr, msg.c_str(), "error", MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+}
+std::wstring utf8_to_wstring(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (size_needed <= 0) {
+        size_needed = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
+        if (size_needed <= 0) return std::wstring();
+        std::wstring out(size_needed, 0);
+        MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), &out[0], size_needed);
+        return out;
+    }
+
+    std::wstring out(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], size_needed);
+    return out;
+}
+std::string url_encode(const std::string& s)
+{
+    std::string result;
+    result.reserve(s.size() * 3);  // 预分配空间
+
+    for (unsigned char c : s)
+    {
+        if ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            result += c;
+        }
+        else
+        {
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%%%02X", c);
+            result.append(hex);
+        }
+    }
+    return result;
+}
+void ocr_image(const HWND backWnd,const cv::Mat image) {
+	workthread.post([backWnd, image] {
+        std::vector<uchar> webp_buffer;
+        std::vector<int> params = {
+            cv::IMWRITE_WEBP_QUALITY, 80   // 1~100，越大质量越好，文件越大
+            // cv::IMWRITE_WEBP_LOSSLESS_MODE, 0  // 可选：无损模式（0=有损，1=无损）
+        };
+        bool success = cv::imencode(".webp", image, webp_buffer, params);
+        if (success) {
+            printf("Image encoded to WebP successfully. Buffer size: %zu bytes\n", webp_buffer.size());
+        }
+        else {
+            printf("Failed to encode image to WebP format.\n");
+        }
+
+        auto res = ocr_client.Post(ocr_path, (char*)webp_buffer.data(), webp_buffer.size(), "image/webp");
+        if (res) {
+			dbgprintf("OCR request completed with status: %d body %s\n", res->status, res->body.c_str());
+            auto json = nlohmann::json::parse(res->body);
+            auto msg = std::make_unique<std::wstring>(utf8_to_wstring(json["result"].get<std::string>()));
+            if (PostMessage(backWnd, WM_USER_OCRFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
+				msg.release();
+            }
+        }
+        });
+}
+void play_sound(std::wstring text) {
+	workthread.post([text = std::move(text)] {
+        int speaker = 20;
+
+        std::string path = "/audio_query?text=" + url_encode(wstring_to_utf8(text)) +
+            "&speaker=" + std::to_string(speaker);
+
+        auto res = voicevox_client.Post(path);
+        if (res) {
+            res->status;
+            res->body;
+            auto json = nlohmann::json::parse(res->body);
+            dbgprintf("postPhonemeLength: %f\n", json["postPhonemeLength"].get<double>());
+            dbgprintf("Status: %d bodylen: %zu\n", res->status, res->body.size());
+            dbgprintf("Body: %s\n", res->body.c_str());
+            if (res->status == 200) {
+                std::string path2 = "/synthesis?speaker=" + std::to_string(speaker);
+                auto res2 = voicevox_client.Post(path2, res->body.c_str(), res->body.size(), "application/json");
+                if (res2) {
+                    dbgprintf("Status: %d bodylen: %zu\n", res2->status, res2->body.size());
+                    dbgprintf("Body: %s\n", res2->body.c_str());
+                    PlaySoundA(res2->body.c_str(), NULL, SND_MEMORY | SND_ASYNC);
+                }
+            }
+        }
+        });
+}
+
+// 翻译函数
+std::string translate_with_ali(
+    const std::string& text = "Hello, world!",
+    const std::string& source_lang = "Japanese",
+    const std::string& target_lang = "Chinese"
+) {
+    nlohmann::json messages = nlohmann::json::array({
+        {{"role", "user"}, {"content", text}}
+        });
+
+    nlohmann::json translation_options = {
+        {"source_lang", source_lang},
+        {"target_lang", target_lang}
+    };
+
+    nlohmann::json extra_body = {
+        {"translation_options", translation_options}
+    };
+
+    std::string result_text = ali_client.chat_completions_create(
+        "qwen-mt-flash",      // 或你想用的模型
+        messages,
+        extra_body
+    );
+	auto result_json = nlohmann::json::parse(result_text);
+	auto translated_text = result_json["choices"][0]["message"]["content"];
+    return translated_text;
+}

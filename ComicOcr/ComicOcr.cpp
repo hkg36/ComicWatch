@@ -10,12 +10,6 @@
 
 #define MAX_LOADSTRING 100
 
-constexpr UINT WMAPP_TRAYICON = WM_APP + 1;
-constexpr UINT HOTKEY_TOGGLE_WINDOW = 1;
-constexpr UINT HOTKEY_REPLAY = 2;
-constexpr UINT DRAG_CAPTURE_TIMER_ID = 1;
-constexpr UINT DRAG_CAPTURE_DELAY_MS = 500;
-
 void dbgprintf(const char* format, ...)
 {
 #ifdef _DEBUG
@@ -57,6 +51,9 @@ BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
+std::wstring ocr_result;
+std::wstring trans_result;
+
 BOOL AddTrayIcon(HWND hWnd);
 void RemoveTrayIcon();
 void ToggleMainWindow();
@@ -72,6 +69,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 {
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
+	load_backprocess_config();
 
     // TODO: 在此处放置代码。
 
@@ -122,7 +120,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
     wcex.cbWndExtra     = 0;
     wcex.hInstance      = hInstance;
     wcex.hIcon          = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_COMICOCR));
-    wcex.hCursor        = LoadCursor(nullptr, IDC_ARROW);
+    wcex.hCursor        = LoadCursor(nullptr, IDC_CROSS);
     wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
     wcex.lpszMenuName   = NULL;
     wcex.lpszClassName  = szWindowClass;
@@ -273,6 +271,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		RemoveTrayIcon();
 		PostQuitMessage(0);
 		break;
+	case WM_USER_OCRFINISH:
+		{
+		std::unique_ptr<std::wstring> msg(
+			reinterpret_cast<std::wstring*>(lParam));
+		ocr_result = std::move(*msg);
+		InvalidateRect(hWnd, nullptr, FALSE);
+		}
+		break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);
     }
@@ -319,7 +325,13 @@ void ToggleMainWindow()
 		}
 		g_isDragging = FALSE;
 		g_hasDragRect = FALSE;
+		if (!ocr_result.empty())
+		{
+			play_sound(ocr_result);
+		}
 		screenshot.release();
+		ocr_result.clear();
+		trans_result.clear();
 		ShowWindow(g_hMainWnd, SW_HIDE);
 		g_isWindowVisible = FALSE;
 	}
@@ -389,6 +401,7 @@ void SaveDragRect()
 
 	cv::Mat cut = img(cv::Rect(x, y, width, height));
 	//cv::imwrite("cut.webp", cut);
+	ocr_image(g_hMainWnd, cut);
 }
 
 void Paint(HWND hWnd, HDC hdc)
@@ -435,10 +448,51 @@ void Paint(HWND hWnd, HDC hdc)
 		HPEN pen = CreatePen(PS_DASH, 1, RGB(255, 0, 0));
 		HGDIOBJ oldPen = SelectObject(memDC, pen);
 		HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(HOLLOW_BRUSH));
+		defer({
+			SelectObject(memDC, oldBrush);
+			SelectObject(memDC, oldPen);
+			DeleteObject(pen);
+			});
 		Rectangle(memDC, rect.left, rect.top, rect.right, rect.bottom);
-		SelectObject(memDC, oldBrush);
-		SelectObject(memDC, oldPen);
-		DeleteObject(pen);
+
+		HFONT hFont = CreateFontW(
+			26, 0, 0, 0,
+			FW_NORMAL,
+			FALSE, FALSE, FALSE,
+			DEFAULT_CHARSET,
+			OUT_OUTLINE_PRECIS,
+			CLIP_DEFAULT_PRECIS,
+			CLEARTYPE_QUALITY,
+			VARIABLE_PITCH,
+			L"Microsoft YaHei"
+		);
+
+		HFONT oldFont = (HFONT)SelectObject(memDC, hFont);
+		defer({
+			SelectObject(memDC, oldFont);
+			DeleteObject(hFont);
+			});
+		
+		if (!ocr_result.empty()) {
+			SetBkMode(memDC, TRANSPARENT);
+			SetTextColor(memDC, RGB(255, 255, 255));
+			HBRUSH blackBrush = (HBRUSH)GetStockObject(BLACK_BRUSH);
+			
+			const int textX = rect.left;
+			const int textY = rect.bottom+5;
+			const int textMaxWidth = imgSize.width - rect.left;
+			const int textMaxHeight = 300;
+
+			RECT textRc{ textX, textY, textX + textMaxWidth, textY + textMaxHeight };
+			int height = DrawTextW(memDC,
+				ocr_result.c_str(),
+				-1,
+				&textRc,
+				DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
+			
+			FillRect(memDC, &textRc, blackBrush);
+			DrawTextW(memDC, ocr_result.c_str(), -1, &textRc, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
+		}
 	}
 
 	BitBlt(hdc, 0, 0, imgSize.width, imgSize.height, memDC, 0, 0, SRCCOPY);

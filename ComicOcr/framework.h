@@ -15,6 +15,7 @@
 #include <tchar.h>
 #include <iostream>
 #include <vector>
+#include <fstream>
 #include <opencv2/opencv.hpp>
 
 class DeferHelper {
@@ -32,3 +33,15 @@ private:
 
 void dbgprintf(const char* format, ...);
 void dbgprintf(const wchar_t* format, ...);
+
+constexpr UINT WMAPP_TRAYICON = WM_APP + 1;
+constexpr UINT WM_USER_OCRFINISH = WM_USER + 1;
+constexpr UINT WM_USER_TRANSFINISH = WM_USER + 2;
+constexpr UINT HOTKEY_TOGGLE_WINDOW = 1;
+constexpr UINT HOTKEY_REPLAY = 2;
+constexpr UINT DRAG_CAPTURE_TIMER_ID = 1;
+constexpr UINT DRAG_CAPTURE_DELAY_MS = 500;
+
+void ocr_image(const HWND backWnd, const cv::Mat image);
+void play_sound(std::wstring text);
+bool load_backprocess_config();

@@ -30,12 +30,18 @@
     <ClInclude Include="ScreenShot.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="BackProcess.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ComicOcr.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ScreenShot.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="BackProcess.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
   </ItemGroup>
