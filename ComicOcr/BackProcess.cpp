@@ -125,8 +125,8 @@ std::string ali_key;
 std::string ocr_origin;
 std::string ocr_path;
 std::string voicevox_server_url;
-std::string voicevox_speaker_id="20";
-std::string voicevox_speed_scale = "1.0";
+int voicevox_speaker_id=20;
+float voicevox_speed_scale = 1.0f;
 
 httplib::Client ocr_client("");
 httplib::Client voicevox_client("");
@@ -154,8 +154,20 @@ bool load_backprocess_config() {
         SplitUrlToOriginAndPath(ocr_server_url, ocr_origin, ocr_path);
         auto& voicevoxNode = node["voicevox"];
         voicevox_server_url = voicevoxNode["src"].get_value<std::string>();
-        voicevox_speaker_id = voicevoxNode["speaker_id"].get_value<std::string>();
-        voicevox_speed_scale = voicevoxNode["speed_scale"].get_value<std::string>();
+        auto& spkid = voicevoxNode["speaker_id"];
+		if (spkid.is_string()) {
+			voicevox_speaker_id = std::stoi(spkid.get_value<std::string>());
+		}
+		else if (spkid.is_integer()) {
+			voicevox_speaker_id = spkid.get_value<int>();
+		}
+		auto& spdscale = voicevoxNode["speed_scale"];
+        if (spdscale.is_string()) {
+            voicevox_speed_scale = std::stof(spdscale.get_value<std::string>());
+		}
+		else if (spdscale.is_float_number()) {
+			voicevox_speed_scale = spdscale.get_value<float>();
+		}
 
         ocr_client = httplib::Client(ocr_origin);
         voicevox_client = httplib::Client(voicevox_server_url);
@@ -232,32 +244,42 @@ void ocr_image(const HWND backWnd,const cv::Mat image) {
         }
         });
 }
+std::string voicevox_sound_buffer;
 void play_sound(std::wstring text) {
 	workthread.post([text = std::move(text)] {
-        int speaker = 20;
-
         std::string path = "/audio_query?text=" + url_encode(wstring_to_utf8(text)) +
-            "&speaker=" + std::to_string(speaker);
-
+            "&speaker=" + std::to_string(voicevox_speaker_id);
         auto res = voicevox_client.Post(path);
         if (res) {
-            res->status;
-            res->body;
-            auto json = nlohmann::json::parse(res->body);
-            dbgprintf("postPhonemeLength: %f\n", json["postPhonemeLength"].get<double>());
-            dbgprintf("Status: %d bodylen: %zu\n", res->status, res->body.size());
-            dbgprintf("Body: %s\n", res->body.c_str());
+            //res->status;
+            //res->body;
             if (res->status == 200) {
-                std::string path2 = "/synthesis?speaker=" + std::to_string(speaker);
-                auto res2 = voicevox_client.Post(path2, res->body.c_str(), res->body.size(), "application/json");
+                auto json = nlohmann::json::parse(res->body);
+                //dbgprintf("Status: %d bodylen: %zu\n", res->status, res->body.size());
+                //dbgprintf("Body: %s\n", res->body.c_str());
+                // 固定语速，避免引擎侧预设导致播放听感异常偏快。
+                json["speedScale"] = voicevox_speed_scale;
+                // 显式提升输出采样率，降低播放器按 48k 假设解码时产生“倍速感”的风险。
+                auto sendbody=json.dump();
+
+                std::string path2 = "/synthesis?speaker=" + std::to_string(voicevox_speaker_id);
+                auto res2 = voicevox_client.Post(path2, sendbody.c_str(), sendbody.size(), "application/json");
                 if (res2) {
                     dbgprintf("Status: %d bodylen: %zu\n", res2->status, res2->body.size());
-                    dbgprintf("Body: %s\n", res2->body.c_str());
-                    PlaySoundA(res2->body.c_str(), NULL, SND_MEMORY | SND_ASYNC);
+                    //dbgprintf("Body: %s\n", res2->body.c_str());
+					voicevox_sound_buffer = std::move(res2->body);
+                    PlaySoundA(voicevox_sound_buffer.c_str(), NULL, SND_MEMORY | SND_ASYNC);
                 }
             }
         }
         });
+}
+void replay_sound() {
+	workthread.post([] {
+		if (!voicevox_sound_buffer.empty()) {
+			PlaySoundA(voicevox_sound_buffer.c_str(), NULL, SND_MEMORY | SND_ASYNC);
+		}
+		});
 }
 
 // 翻译函数
@@ -288,3 +310,48 @@ std::string translate_with_ali(
 	auto translated_text = result_json["choices"][0]["message"]["content"];
     return translated_text;
 }
+
+class RecentCache {
+private:
+    std::deque<std::pair<std::string, std::string>> items;
+    const size_t max_size = 3;
+
+public:
+    void put(std::string key, std::string value) {
+        auto it = std::find_if(items.begin(), items.end(),
+            [&](const auto& p) { return p.first == key; });
+
+        if (it != items.end()) {
+            items.erase(it);
+        }
+
+        items.emplace_front(std::move(key), std::move(value));
+
+        if (items.size() > max_size) {
+            items.pop_back();
+        }
+    }
+
+    std::optional<std::string> get(const std::string& key) {
+        auto it = std::find_if(items.begin(), items.end(),
+            [&](const auto& p) { return p.first == key; });
+
+        if (it == items.end()) {
+            return std::nullopt;
+        }
+
+		return it->second;
+		//访问后移到最前面
+        auto pair = std::move(*it);
+        items.erase(it);
+        items.emplace_front(std::move(pair));
+
+        return pair.second;
+    }
+
+    size_t size() const { return items.size(); }
+
+    const std::deque<std::pair<std::string, std::string>>& getAll() const {
+        return items;
+    }
+};

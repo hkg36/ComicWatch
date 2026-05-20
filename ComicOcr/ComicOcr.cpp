@@ -199,7 +199,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ToggleMainWindow();
             return 0;
         case HOTKEY_REPLAY:
-            // TODO: 处理重新播放的逻辑
+			replay_sound();
             return 0;
         }
         break;

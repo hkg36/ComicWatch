@@ -44,4 +44,5 @@ constexpr UINT DRAG_CAPTURE_DELAY_MS = 500;
 
 void ocr_image(const HWND backWnd, const cv::Mat image);
 void play_sound(std::wstring text);
+void replay_sound();
 bool load_backprocess_config();
