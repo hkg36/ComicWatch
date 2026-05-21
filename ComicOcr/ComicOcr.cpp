@@ -7,6 +7,7 @@
 #include <windowsx.h>
 #include <algorithm>
 #include "ScreenShot.h"
+#include "BackProcess.h"
 
 #define MAX_LOADSTRING 100
 
@@ -498,7 +499,7 @@ void Paint(HWND hWnd, HDC hdc)
 		Rectangle(memDC, rect.left, rect.top, rect.right, rect.bottom);
 
 		HFONT hFont = CreateFontW(
-			26, 0, 0, 0,
+			32, 0, 0, 0,
 			FW_NORMAL,
 			FALSE, FALSE, FALSE,
 			DEFAULT_CHARSET,

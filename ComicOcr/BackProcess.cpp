@@ -1,4 +1,5 @@
 #include "framework.h"
+#include "BackProcess.h"
 #include "../ComicWatch/MessageThread.h"
 #include <iostream>
 #define OPENSSL_SUPPRESS_DEPRECATED
@@ -13,7 +14,7 @@
 class AliTransClient {
 private:
     std::string api_key;
-    const std::string site = "https://dashscope.aliyuncs.com";
+    httplib::Client cli{"https://dashscope.aliyuncs.com"};
     const std::string url = "/compatible-mode/v1";
 public:
     AliTransClient() {}
@@ -32,7 +33,6 @@ public:
             throw std::runtime_error("API key not set");
         }
 
-        httplib::Client cli(site);
         cli.set_read_timeout(60, 0);   // 60秒超时
         cli.set_write_timeout(60, 0);
 
