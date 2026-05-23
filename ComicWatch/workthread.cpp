@@ -10,14 +10,13 @@
 #include <vector>
 #include <shellapi.h>
 #include <cwctype>
-#include <miniz.h>
+#include <zip.h>
 #ifdef _DEBUG
 #pragma comment(lib, "opencv_world4120d.lib")
-#pragma comment(lib, "minizd.lib")
 #else
 #pragma comment(lib, "opencv_world4120.lib")
-#pragma comment(lib, "miniz.lib")
 #endif
+#pragma comment(lib,"zip.lib")
 #include "MessageThread.h"
 
 MessageThread g_messageThread;
@@ -37,7 +36,7 @@ struct WorkerState {
 
     std::map<int, cv::Mat> preloadCache;
 
-    mz_zip_archive archive{};
+    zip_t* archive = nullptr;
     bool archiveOpened = false;
     std::wstring archiveZipPath;
 } g_worker;
@@ -60,36 +59,41 @@ enum FileMode{
 };
 FileMode mode = FileMode_None;
 void close_open_archive() {
-    if (g_worker.archiveOpened) {
-        mz_zip_reader_end(&g_worker.archive);
+	if (g_worker.archiveOpened) {
+		if (g_worker.archive) {
+			zip_close(g_worker.archive);
+			g_worker.archive = nullptr;
+		}
 		g_worker.currentImage.release();
-        g_worker.archiveOpened = false;
-        g_worker.archive = mz_zip_archive{};
-        g_worker.archiveZipPath.clear();
-        g_worker.badImageEntries.clear();
-        g_worker.preloadCache.clear();
+		g_worker.archiveOpened = false;
+		g_worker.archiveZipPath.clear();
+		g_worker.badImageEntries.clear();
+		g_worker.preloadCache.clear();
 	}
 	if (g_fileWorker.folderOpened){
 		g_fileWorker.folderOpened = false;
 		g_fileWorker.currentImage.release();
-        g_fileWorker.badImageEntries.clear();
-        g_fileWorker.preloadCache.clear();
+		g_fileWorker.badImageEntries.clear();
+		g_fileWorker.preloadCache.clear();
 	}
 }
 
 bool open_archive_for_zip(const std::wstring& zipPath) {
-    if (g_worker.archiveOpened && g_worker.archiveZipPath == zipPath) {
-        return true;
-    }
+	if (g_worker.archiveOpened && g_worker.archiveZipPath == zipPath) {
+		return true;
+	}
 
-    close_open_archive();
-    if (!mz_zip_reader_init_file(&g_worker.archive, utf8path(zipPath).c_str(), 0)) {
-        return false;
-    }
+	close_open_archive();
+	int err = 0;
+	zip_t* archive = zip_open(utf8path(zipPath).c_str(), ZIP_RDONLY, &err);
+	if (!archive) {
+		return false;
+	}
 
-    g_worker.archiveOpened = true;
-    g_worker.archiveZipPath = zipPath;
-    return true;
+	g_worker.archive = archive;
+	g_worker.archiveOpened = true;
+	g_worker.archiveZipPath = zipPath;
+	return true;
 }
 
 std::string utf8path(const std::wstring& wpath) {
@@ -279,34 +283,36 @@ void scan_images_in_folder(const std::wstring& folder)
 
 bool decode_image_from_zip_entry(const std::wstring& zipPath, const std::string& entryName, cv::Mat& outImage, std::wstring* outStatus = nullptr) {
 	assert(mode == FileMode_Zip);
-    std::wstring badKey = make_bad_image_key(zipPath, entryName);
-    if (g_worker.badImageEntries.find(badKey) != g_worker.badImageEntries.end()) {
-        return false;
-    }
+	std::wstring badKey = make_bad_image_key(zipPath, entryName);
+	if (g_worker.badImageEntries.find(badKey) != g_worker.badImageEntries.end()) {
+		return false;
+	}
 
-    if (!open_archive_for_zip(zipPath)) {
-        g_worker.badImageEntries.insert(std::move(badKey));
-        return false;
-    }
+	if (!open_archive_for_zip(zipPath)) {
+		g_worker.badImageEntries.insert(std::move(badKey));
+		return false;
+	}
+	dbgprintf("Decoding image from ZIP: %s, entry: %s\n", zipPath.c_str(), entryName.c_str());
+	zip_stat_t st{};
+	if (zip_stat(g_worker.archive, entryName.c_str(), ZIP_FL_ENC_UTF_8, &st) != 0 || st.size <= 0) {
+		g_worker.badImageEntries.insert(std::move(badKey));
+		return false;
+	}
 
-    int fileIndex = mz_zip_reader_locate_file(&g_worker.archive, entryName.c_str(), nullptr, 0);
-    if (fileIndex < 0) {
-        g_worker.badImageEntries.insert(std::move(badKey));
-        return false;
-    }
+	zip_file_t* file = zip_fopen(g_worker.archive, entryName.c_str(), ZIP_FL_ENC_UTF_8);
+	if (!file) {
+		g_worker.badImageEntries.insert(std::move(badKey));
+		return false;
+	}
 
-    mz_zip_archive_file_stat st{};
-    if (!mz_zip_reader_file_stat(&g_worker.archive, (mz_uint)fileIndex, &st) || st.m_uncomp_size <= 0) {
-        g_worker.badImageEntries.insert(std::move(badKey));
-        return false;
-    }
-
-    std::vector<unsigned char> buffer((size_t)st.m_uncomp_size);
-    if (!mz_zip_reader_extract_to_mem(&g_worker.archive, (mz_uint)fileIndex, buffer.data(), buffer.size(), 0)) {
-        g_worker.badImageEntries.insert(std::move(badKey));
-        return false;
-    }
-
+	std::vector<unsigned char> buffer((size_t)st.size);
+	zip_int64_t readSize = zip_fread(file, buffer.data(), buffer.size());
+	zip_fclose(file);
+	if (readSize < 0 || static_cast<zip_uint64_t>(readSize) != st.size) {
+		g_worker.badImageEntries.insert(std::move(badKey));
+		return false;
+	}
+    dbgprintf("Read %lld bytes from ZIP entry: %s\n", readSize, entryName.c_str());
     cv::Mat img = cv::imdecode(buffer, cv::IMREAD_UNCHANGED);
     if (img.empty()) {
         g_worker.badImageEntries.insert(std::move(badKey));
@@ -560,25 +566,28 @@ bool load_current_image_file() {
 
 bool open_zip_at(int index) {
 	assert(mode == FileMode_Zip);
-    if (index < 0 || index >= (int)g_worker.zipFiles.size()) return false;
+	if (index < 0 || index >= (int)g_worker.zipFiles.size()) return false;
 
-    const std::wstring& zipPath = g_worker.zipFiles[index];
-    if (!open_archive_for_zip(zipPath)) return false;
+	const std::wstring& zipPath = g_worker.zipFiles[index];
+	if (!open_archive_for_zip(zipPath)) return false;
 
-    std::vector<std::string> entries;
-    mz_uint numEntries = mz_zip_reader_get_num_files(&g_worker.archive);
-    for (mz_uint i = 0; i < numEntries; ++i) {
-        if (mz_zip_reader_is_file_a_directory(&g_worker.archive, i)) continue;
+	std::vector<std::string> entries;
+	zip_int64_t numEntries = zip_get_num_entries(g_worker.archive, ZIP_FL_UNCHANGED);
+	if (numEntries < 0) {
+		return false;
+	}
 
-        mz_zip_archive_file_stat st{};
-        if (!mz_zip_reader_file_stat(&g_worker.archive, i, &st)) continue;
+	for (zip_uint64_t i = 0; i < static_cast<zip_uint64_t>(numEntries); ++i) {
+		zip_stat_t st{};
+		if (zip_stat_index(g_worker.archive, i, ZIP_FL_ENC_UTF_8, &st) != 0) continue;
+		if (!st.name) continue;
 
-        std::string filename(st.m_filename);
-        if (filename.empty()) continue;
-        if (is_supported_image_file(filename)) {
-            entries.push_back(filename);
-        }
-    }
+		std::string filename(st.name);
+		if (filename.empty() || filename.back() == '/') continue;
+		if (is_supported_image_file(filename)) {
+			entries.push_back(filename);
+		}
+	}
 
     if (entries.empty()) return false;
 
@@ -718,11 +727,12 @@ void delete_current_folder() {
     std::wstring deletingPath = g_fileWorker.currentFolder;
     close_open_archive();
     if (!move_file_to_recycle_bin(deletingPath)) return;
+    fs::path selectedPath(deletingPath);
+    g_fileWorker.currentFolder = selectedPath.parent_path().wstring();
     g_fileWorker.currentImage.release();
     g_fileWorker.imageFiles.clear();
     g_fileWorker.imageIndex = -1;
     g_fileWorker.preloadCache.clear();
-	g_fileWorker.currentFolder.clear();
 	g_fileWorker.statusMessage = L"当前文件夹已删除:\n" + deletingPath;
 	dbgprintf(L"Deleted folder: %s\n", deletingPath.c_str());
 }

@@ -97,7 +97,13 @@ public:
             running = false;
         }
         cv.notify_one();
-        // jthread 会自动 join
+    }
+
+    void stop_and_join() {
+        shutdown();
+        if (worker.joinable()) {
+            worker.join();
+        }
     }
 private:
     void run() {
@@ -110,7 +116,7 @@ private:
                     return !sync_queue.empty() || !async_queue.empty() || IdleTask || !running;
                     });
 
-                if (!running && sync_queue.empty() && async_queue.empty() && !IdleTask) {
+                if (!running) {
                     break;
                 }
 

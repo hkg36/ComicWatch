@@ -3,6 +3,7 @@
 
 #include "framework.h"
 #include "ComicWatch.h"
+#include "MessageThread.h"
 
 #include <filesystem>
 #include <string>
@@ -12,7 +13,7 @@
 
 #define MAX_LOADSTRING 100
 
-
+extern MessageThread g_messageThread;
 void dbgprintf(const char* format, ...)
 {
 #ifdef _DEBUG
@@ -172,7 +173,7 @@ bool save_persisted_state(HWND hWnd) {
     return true;
 }
 
-void apply_snapshot(const WorkerSnapshot& snapshot) {
+void apply_snapshot(WorkerSnapshot& snapshot) {
     g_state.fileCount = snapshot.fileCount;
     g_state.fileIndex = snapshot.fileIndex;
     g_state.imageCount = snapshot.imageCount;
@@ -373,6 +374,7 @@ bool SingleInstance()
     }
     return true;
 }
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     _In_opt_ HINSTANCE hPrevInstance,
     _In_ LPWSTR    lpCmdLine,
@@ -392,7 +394,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     if (!InitInstance(hInstance, g_state.wasMaximized ? SW_SHOWMAXIMIZED : nCmdShow)) {
         return FALSE;
     }
-    //CreateWorkerThread(mainWnd);
     MSG msg;
 
     while (GetMessage(&msg, nullptr, 0, 0)) {
@@ -400,7 +401,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         DispatchMessage(&msg);
     }
 
-    //StopWorkerThread();
     return (int)msg.wParam;
 }
 
@@ -683,6 +683,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_DESTROY:
         save_persisted_state(hWnd);
+        g_messageThread.stop_and_join();
         PostQuitMessage(0);
         break;
 

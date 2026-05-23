@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "ScreenShot.h"
 #include "BackProcess.h"
+#include "../ComicWatch/MessageThread.h"
 
 #define MAX_LOADSTRING 100
 
@@ -34,6 +35,7 @@ void dbgprintf(const wchar_t* format, ...)
 #endif
 }
 
+extern MessageThread workthread;
 // 全局变量:
 HINSTANCE hInst;                                // 当前实例
 WCHAR szTitle[MAX_LOADSTRING];                  // 标题栏文本
@@ -296,6 +298,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		UnregisterHotKey(hWnd, HOTKEY_TOGGLE_WINDOW);
 		UnregisterHotKey(hWnd, HOTKEY_REPLAY);
 		RemoveTrayIcon();
+		workthread.stop_and_join();
 		PostQuitMessage(0);
 		break;
 	case WM_USER_OCRFINISH:
