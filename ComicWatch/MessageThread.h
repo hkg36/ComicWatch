@@ -13,7 +13,7 @@ class MessageThread {
 public:
     MessageThread() : worker([this] { run(); }) {}
 
-    ~MessageThread() { shutdown(); }
+    ~MessageThread() { stop_and_join(); }
 
     // ==================== 同步调用 ≡ SendMessage ====================
     template<typename Func, typename... Args>
@@ -92,16 +92,12 @@ public:
         cv.notify_one();
     }
 
-    void shutdown() {
+    void stop_and_join() {
         {
             std::lock_guard<std::mutex> lk(mtx);
             running = false;
         }
         cv.notify_one();
-    }
-
-    void stop_and_join() {
-        shutdown();
         if (worker.joinable()) {
             worker.join();
         }

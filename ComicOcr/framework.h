@@ -31,8 +31,13 @@ private:
 #define TOKENPASTE2(x, y) TOKENPASTE(x, y)
 #define defer(func) DeferHelper TOKENPASTE2(defer_dummy_, __LINE__)([&](){ func; })
 
-void dbgprintf(const char* format, ...);
-void dbgprintf(const wchar_t* format, ...);
+void _dbgprintf(const char* format, ...);
+void _dbgprintf(const wchar_t* format, ...);
+#ifdef NDEBUG
+#define dbgprintf(fmt, ...)   ((void)0)
+#else
+#define dbgprintf(fmt, ...)   _dbgprintf("[%s:%d] " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#endif
 
 constexpr UINT WMAPP_TRAYICON = WM_APP + 1;
 constexpr UINT WM_USER_OCRFINISH = WM_USER + 1;

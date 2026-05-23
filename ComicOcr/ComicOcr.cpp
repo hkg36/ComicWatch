@@ -12,27 +12,23 @@
 
 #define MAX_LOADSTRING 100
 
-void dbgprintf(const char* format, ...)
+void _dbgprintf(const char* format, ...)
 {
-#ifdef _DEBUG
 	char buffer[1024];
 	va_list args;
 	va_start(args, format);
 	vsnprintf(buffer, sizeof(buffer), format, args);
 	va_end(args);
 	OutputDebugStringA(buffer);
-#endif
 }
-void dbgprintf(const wchar_t* format, ...)
+void _dbgprintf(const wchar_t* format, ...)
 {
-#ifdef _DEBUG
 	wchar_t buffer[1024];
 	va_list args;
 	va_start(args, format);
 	vswprintf(buffer, sizeof(buffer) / sizeof(wchar_t), format, args);
 	va_end(args);
 	OutputDebugStringW(buffer);
-#endif
 }
 
 extern MessageThread workthread;

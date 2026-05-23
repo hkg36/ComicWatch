@@ -35,8 +35,14 @@ std::shared_ptr<WorkerResult> ShowPrevZip();
 std::shared_ptr<WorkerResult> DeleteCurrentFile();
 std::shared_ptr<WorkerResult> GetSnapshot();
 
-void dbgprintf(const char* format, ...);
-void dbgprintf(const wchar_t* format, ...);
+void _dbgprintf(const char* format, ...);
+void _dbgprintf(const wchar_t* format, ...);
+
+#ifdef NDEBUG
+#define dbgprintf(fmt, ...)   ((void)0)
+#else
+#define dbgprintf(fmt, ...)   _dbgprintf("[%s:%d] " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#endif
 
 class DeferHelper {
 public:
