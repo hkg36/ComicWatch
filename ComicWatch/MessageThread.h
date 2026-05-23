@@ -5,6 +5,7 @@
 #include <future>
 #include <functional>
 #include <type_traits>
+#include <utility>
 
 using Task = std::move_only_function<void()>;
 
@@ -30,11 +31,11 @@ public:
             ...args = std::forward<Args>(args)]() mutable {
             try {
                 if constexpr (std::is_void_v<R>) {
-                    std::invoke(std::move(func), std::move(args)...);
+                    std::invoke(std::move(func), std::forward<decltype(args)>(args)...);
                     p.set_value();
                 }
                 else {
-                    p.set_value(std::invoke(std::move(func), std::move(args)...));
+                    p.set_value(std::invoke(std::move(func), std::forward<decltype(args)>(args)...));
                 }
             }
             catch (...) {
@@ -58,7 +59,7 @@ public:
         auto task = [func = std::forward<Func>(f),
             ...args = std::forward<Args>(args)]() mutable {
             try {
-                std::invoke(std::move(func), std::move(args)...);
+                std::invoke(std::move(func), std::forward<decltype(args)>(args)...);
             }
             catch (...) {
                 // 异步任务默认吃掉异常，你也可以改成 std::terminate 或日志
@@ -77,7 +78,7 @@ public:
         auto task = [func = std::forward<Func>(f),
             ...args = std::forward<Args>(args)]() mutable {
             try {
-                std::invoke(std::move(func), std::move(args)...);
+                std::invoke(std::move(func), std::forward<decltype(args)>(args)...);
             }
             catch (...) {
                 // 空闲任务默认吃掉异常，你也可以改成 std::terminate 或日志
