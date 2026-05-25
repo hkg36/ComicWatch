@@ -190,6 +190,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
     case WM_ERASEBKGND:
         return 1;
+	case WM_CREATE:
+		workthread.start();
+		break;
     case WM_COMMAND:
         {
             int wmId = LOWORD(wParam);
@@ -380,6 +383,8 @@ void ToggleMainWindow()
 	else
 	{
 		screenshot.getScreenshot(); // 切换到显示窗口时获取屏幕截图
+		ocr_result.clear();
+		trans_result.clear();
 		g_isDragging = FALSE;
 		g_hasDragRect = FALSE;
 		ShowWindow(g_hMainWnd, SW_SHOW);
@@ -487,7 +492,19 @@ void Paint(HWND hWnd, HDC hdc)
 	if (g_isDragging && g_hasDragRect)
 	{
 		RECT rect = GetNormalizedDragRect();
-		HPEN pen = CreatePen(PS_DASH, 1, RGB(255, 0, 0));
+		LOGBRUSH lb;
+		lb.lbStyle = BS_SOLID;
+		lb.lbColor = RGB(255, 0, 0);
+		lb.lbHatch = 0;
+
+		DWORD style[] = { 10, 7 };  // dash 和 gap 的长度（可自定义）
+
+		HPEN pen = ExtCreatePen(
+			PS_GEOMETRIC | PS_USERSTYLE | PS_ENDCAP_FLAT,
+			2,                    // 宽度
+			&lb,
+			2,                    // style 数组长度
+			style);               // dash pattern
 		HGDIOBJ oldPen = SelectObject(memDC, pen);
 		HGDIOBJ oldBrush = SelectObject(memDC, GetStockObject(HOLLOW_BRUSH));
 		defer({

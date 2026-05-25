@@ -574,7 +574,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
     case WM_ERASEBKGND:
         return 1;
-
+	case WM_CREATE:
+        g_messageThread.start();
+		break;
     case WM_SIZE:
         if (wParam == SIZE_MAXIMIZED) {
             update_window_border(hWnd, true);

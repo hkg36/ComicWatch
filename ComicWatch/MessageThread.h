@@ -11,9 +11,12 @@ using Task = std::move_only_function<void()>;
 
 class MessageThread {
 public:
-    MessageThread() : worker([this] { run(); }) {}
+    //MessageThread() : worker([this] { run(); }) {}
 
     ~MessageThread() { stop_and_join(); }
+	void start() {
+		worker = std::jthread([this] { run(); });
+	}
 
     // ==================== 同步调用 ≡ SendMessage ====================
     template<typename Func, typename... Args>
