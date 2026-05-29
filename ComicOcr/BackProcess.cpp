@@ -218,60 +218,74 @@ std::string url_encode(const std::string& s)
     }
     return result;
 }
+std::wstring _ocr_image(const cv::Mat image) {
+	std::vector<uchar> webp_buffer;
+	std::vector<int> params = {
+		cv::IMWRITE_WEBP_QUALITY, 80   // 1~100，越大质量越好，文件越大
+		// cv::IMWRITE_WEBP_LOSSLESS_MODE, 0  // 可选：无损模式（0=有损，1=无损）
+	};
+	bool success = cv::imencode(".webp", image, webp_buffer, params);
+	if (success) {
+		dbgprintf("Image encoded to WebP successfully. Buffer size: %zu bytes\n", webp_buffer.size());
+	}
+	else {
+		dbgprintf("Failed to encode image to WebP format.\n");
+		return L"";
+	}
+	auto res = ocr_client.Post(ocr_path, (char*)webp_buffer.data(), webp_buffer.size(), "image/webp");
+	if (res) {
+		dbgprintf("OCR request completed with status: %d body %s\n", res->status, res->body.c_str());
+		auto json = nlohmann::json::parse(res->body);
+		return utf8_to_wstring(json["result"].get<std::string>());
+	}
+	else {
+        return L"";
+	}
+}
 void ocr_image(const HWND backWnd,const cv::Mat image) {
 	workthread.post([backWnd, image] {
-        std::vector<uchar> webp_buffer;
-        std::vector<int> params = {
-            cv::IMWRITE_WEBP_QUALITY, 80   // 1~100，越大质量越好，文件越大
-            // cv::IMWRITE_WEBP_LOSSLESS_MODE, 0  // 可选：无损模式（0=有损，1=无损）
-        };
-        bool success = cv::imencode(".webp", image, webp_buffer, params);
-        if (success) {
-            printf("Image encoded to WebP successfully. Buffer size: %zu bytes\n", webp_buffer.size());
-        }
-        else {
-            printf("Failed to encode image to WebP format.\n");
-        }
-
-        auto res = ocr_client.Post(ocr_path, (char*)webp_buffer.data(), webp_buffer.size(), "image/webp");
-        if (res) {
-			dbgprintf("OCR request completed with status: %d body %s\n", res->status, res->body.c_str());
-            auto json = nlohmann::json::parse(res->body);
-            auto msg = std::make_unique<std::wstring>(utf8_to_wstring(json["result"].get<std::string>()));
-            if (PostMessage(backWnd, WM_USER_OCRFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
-				msg.release();
-            }
+		auto ocr_result = _ocr_image(image);
+		if (ocr_result.empty()) {
+			dbgprintf("OCR failed or returned empty result.\n");
+			return;
+		}
+        auto msg = std::make_unique<std::wstring>(ocr_result);
+        if (PostMessage(backWnd, WM_USER_OCRFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
+			msg.release();
         }
         });
 }
 std::string voicevox_sound_buffer;
-void play_sound(std::wstring text) {
-	workthread.post([text = std::move(text)] {
-        std::string path = "/audio_query?text=" + url_encode(wstring_to_utf8(text)) +
-            "&speaker=" + std::to_string(voicevox_speaker_id);
-        auto res = voicevox_client.Post(path);
-        if (res) {
-            //res->status;
-            //res->body;
-            if (res->status == 200) {
-                auto json = nlohmann::json::parse(res->body);
-                //dbgprintf("Status: %d bodylen: %zu\n", res->status, res->body.size());
-                //dbgprintf("Body: %s\n", res->body.c_str());
-                // 固定语速，避免引擎侧预设导致播放听感异常偏快。
-                json["speedScale"] = voicevox_speed_scale;
-                // 显式提升输出采样率，降低播放器按 48k 假设解码时产生“倍速感”的风险。
-                auto sendbody=json.dump();
+void _play_sound(const std::wstring& text) {
+    std::string path = "/audio_query?text=" + url_encode(wstring_to_utf8(text)) +
+        "&speaker=" + std::to_string(voicevox_speaker_id);
+    auto res = voicevox_client.Post(path);
+    if (res) {
+        //res->status;
+        //res->body;
+        if (res->status == 200) {
+            auto json = nlohmann::json::parse(res->body);
+            //dbgprintf("Status: %d bodylen: %zu\n", res->status, res->body.size());
+            //dbgprintf("Body: %s\n", res->body.c_str());
+            // 固定语速，避免引擎侧预设导致播放听感异常偏快。
+            json["speedScale"] = voicevox_speed_scale;
+            // 显式提升输出采样率，降低播放器按 48k 假设解码时产生“倍速感”的风险。
+            auto sendbody = json.dump();
 
-                std::string path2 = "/synthesis?speaker=" + std::to_string(voicevox_speaker_id);
-                auto res2 = voicevox_client.Post(path2, sendbody.c_str(), sendbody.size(), "application/json");
-                if (res2) {
-                    dbgprintf("Status: %d bodylen: %zu\n", res2->status, res2->body.size());
-                    //dbgprintf("Body: %s\n", res2->body.c_str());
-					voicevox_sound_buffer = std::move(res2->body);
-                    PlaySoundA(voicevox_sound_buffer.c_str(), NULL, SND_MEMORY | SND_ASYNC);
-                }
+            std::string path2 = "/synthesis?speaker=" + std::to_string(voicevox_speaker_id);
+            auto res2 = voicevox_client.Post(path2, sendbody.c_str(), sendbody.size(), "application/json");
+            if (res2) {
+                dbgprintf("Status: %d bodylen: %zu\n", res2->status, res2->body.size());
+                //dbgprintf("Body: %s\n", res2->body.c_str());
+                voicevox_sound_buffer = std::move(res2->body);
+                PlaySoundA(voicevox_sound_buffer.c_str(), NULL, SND_MEMORY | SND_ASYNC);
             }
         }
+    }
+}
+void play_sound(std::wstring text) {
+	workthread.post([text = std::move(text)] {
+		_play_sound(text);
         });
 }
 void replay_sound() {
@@ -281,7 +295,15 @@ void replay_sound() {
 		}
 		});
 }
-
+void back_ocr_and_play(const cv::Mat image) {
+	workthread.post([image] {
+		auto ocr_result = _ocr_image(image);
+		if (ocr_result.empty()) {
+			return;
+		}
+		_play_sound(ocr_result);
+		});
+}
 // 翻译函数
 std::string translate_with_ali(
     const std::string& text = "Hello, world!",
@@ -331,12 +353,12 @@ public:
         }
     }
 
-    std::optional<std::basic_string<T>> get(const std::basic_string<T>& key) {
+    std::basic_string<T> get(const std::basic_string<T>& key) {
         auto it = std::find_if(items.begin(), items.end(),
             [&](const auto& p) { return p.first == key; });
 
         if (it == items.end()) {
-            return std::nullopt;
+            return std::basic_string<T>();
         }
 
 		return it->second;
@@ -362,6 +384,7 @@ void start_translation(HWND hWnd,std::wstring text) {
 		std::string translated = translate_with_ali(utf8_text);
 		std::wstring w_translated = utf8_to_wstring(translated);
 		translation_cache.put(text, w_translated);
+		dbgprintf(L"Src: %s\nTranslation result: %s\n", text.c_str(), w_translated.c_str());
 		auto msg = std::make_unique<std::wstring>(std::move(w_translated));
 		if (PostMessage(hWnd, WM_USER_TRANSFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
 			msg.release();
@@ -371,6 +394,6 @@ void start_translation(HWND hWnd,std::wstring text) {
 std::wstring check_translation_cache(std::wstring text) {
 	return workthread.send([text = std::move(text)] -> std::wstring {
 		auto w_translated = translation_cache.get(text);
-		return w_translated ? *w_translated : std::wstring();
+		return w_translated;
 		});
 }

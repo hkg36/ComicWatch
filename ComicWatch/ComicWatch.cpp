@@ -14,25 +14,6 @@
 #define MAX_LOADSTRING 100
 
 extern MessageThread g_messageThread;
-void _dbgprintf(const char* format, ...)
-{
-    char buffer[1024];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-    OutputDebugStringA(buffer);
-}
-void _dbgprintf(const wchar_t* format, ...)
-{
-    wchar_t buffer[1024];
-    va_list args;
-    va_start(args, format);
-    vswprintf(buffer, sizeof(buffer) / sizeof(wchar_t), format, args);
-    va_end(args);
-    OutputDebugStringW(buffer);
-}
-
 
 namespace fs = std::filesystem;
 

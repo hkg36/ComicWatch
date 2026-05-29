@@ -5,3 +5,4 @@ void replay_sound();
 bool load_backprocess_config();
 void start_translation(HWND hWnd, std::wstring text);
 std::wstring check_translation_cache(std::wstring text);
+void back_ocr_and_play(const cv::Mat image);

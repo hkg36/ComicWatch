@@ -16,6 +16,7 @@
 #include <iostream>
 #include <vector>
 #include <fstream>
+#include <string>
 #include <opencv2/opencv.hpp>
 
 class DeferHelper {
@@ -31,12 +32,45 @@ private:
 #define TOKENPASTE2(x, y) TOKENPASTE(x, y)
 #define defer(func) DeferHelper TOKENPASTE2(defer_dummy_, __LINE__)([&](){ func; })
 
-void _dbgprintf(const char* format, ...);
-void _dbgprintf(const wchar_t* format, ...);
+inline void _dbgprintf(const char* format, ...)
+{
+	char buffer[1024];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(buffer, sizeof(buffer), format, args);
+	va_end(args);
+	OutputDebugStringA(buffer);
+}
+inline void _dbgprintf(const wchar_t* format, ...)
+{
+	wchar_t buffer[1024];
+	va_list args;
+	va_start(args, format);
+	vswprintf(buffer, sizeof(buffer) / sizeof(wchar_t), format, args);
+	va_end(args);
+	OutputDebugStringW(buffer);
+}
+
+template <typename... Args>
+inline void dbgprintf_with_location(const char* file, int line, const char* format, Args... args)
+{
+    std::string fullFormat = "[%s:%d] ";
+    fullFormat += format;
+    _dbgprintf(fullFormat.c_str(), file, line, args...);
+}
+
+template <typename... Args>
+inline void dbgprintf_with_location(const char* file, int line, const wchar_t* format, Args... args)
+{
+    std::wstring fullFormat = L"[%hs:%d] ";
+    fullFormat += format;
+    _dbgprintf(fullFormat.c_str(), file, line, args...);
+}
+
 #ifdef NDEBUG
-#define dbgprintf(fmt, ...)   ((void)0)
+#define dbgprintf(...)   ((void)0)
 #else
-#define dbgprintf(fmt, ...)   _dbgprintf("[%s:%d] " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define dbgprintf(...)   dbgprintf_with_location(__FILE__, __LINE__, __VA_ARGS__)
 #endif
 
 constexpr UINT WMAPP_TRAYICON = WM_APP + 1;
@@ -45,6 +79,6 @@ constexpr UINT WM_USER_TRANSFINISH = WM_USER + 2;
 constexpr UINT HOTKEY_TOGGLE_WINDOW = 1;
 constexpr UINT HOTKEY_REPLAY = 2;
 constexpr UINT DRAG_CAPTURE_TIMER_ID = 1;
-constexpr UINT START_TRANSLATE_DELAY_ID = 2;
-constexpr UINT DRAG_CAPTURE_DELAY_MS = 500;
+constexpr UINT START_TRANSLATE_TIMER_ID = 2;
+constexpr UINT DRAG_CAPTURE_DELAY_MS = 300;
 constexpr UINT START_TRANS_DELAY_MS = 500;

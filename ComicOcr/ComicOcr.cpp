@@ -12,25 +12,6 @@
 
 #define MAX_LOADSTRING 100
 
-void _dbgprintf(const char* format, ...)
-{
-	char buffer[1024];
-	va_list args;
-	va_start(args, format);
-	vsnprintf(buffer, sizeof(buffer), format, args);
-	va_end(args);
-	OutputDebugStringA(buffer);
-}
-void _dbgprintf(const wchar_t* format, ...)
-{
-	wchar_t buffer[1024];
-	va_list args;
-	va_start(args, format);
-	vswprintf(buffer, sizeof(buffer) / sizeof(wchar_t), format, args);
-	va_end(args);
-	OutputDebugStringW(buffer);
-}
-
 extern MessageThread workthread;
 // 全局变量:
 HINSTANCE hInst;                                // 当前实例
@@ -52,6 +33,7 @@ INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
 
 std::wstring ocr_result;
 std::wstring trans_result;
+Screenshot screenshot;
 
 BOOL AddTrayIcon(HWND hWnd);
 void RemoveTrayIcon();
@@ -59,7 +41,8 @@ void ToggleMainWindow();
 void ShowTrayMenu(HWND hWnd);
 void Paint(HWND hWnd, HDC hdc);
 RECT GetNormalizedDragRect();
-void SaveDragRect();
+cv::Mat GetDragRectMat();
+void OCR_DragRect();
 
 bool SingleInstance()
 {
@@ -214,6 +197,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         switch(wParam)
         {
         case HOTKEY_TOGGLE_WINDOW:
+			screenshot.release();
+			g_dragStartPoint = { 0,0 };
+			g_dragCurrentPoint = { 0,0 };
+			ocr_result.clear();
             ToggleMainWindow();
             return 0;
         case HOTKEY_REPLAY:
@@ -249,7 +236,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			g_dragCurrentPoint.y = GET_Y_LPARAM(lParam);
 			g_hasDragRect = TRUE;
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
-			KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
+			KillTimer(hWnd, START_TRANSLATE_TIMER_ID);
 			SetTimer(hWnd, DRAG_CAPTURE_TIMER_ID, DRAG_CAPTURE_DELAY_MS, nullptr);
 			InvalidateRect(hWnd, nullptr, FALSE);
 		}
@@ -258,7 +245,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (g_isDragging)
 		{
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
-			KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
+			KillTimer(hWnd, START_TRANSLATE_TIMER_ID);
 			ReleaseCapture();
 			g_isDragging = FALSE;
 			g_hasDragRect = FALSE;
@@ -269,11 +256,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (wParam == DRAG_CAPTURE_TIMER_ID && g_isDragging && g_hasDragRect)
 		{
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
-			SaveDragRect();
+			OCR_DragRect();
 		}
-		if (wParam == START_TRANSLATE_DELAY_ID)
+		if (wParam == START_TRANSLATE_TIMER_ID)
 		{
-			KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
+			KillTimer(hWnd, START_TRANSLATE_TIMER_ID);
 			if (!ocr_result.empty()) {
 				start_translation(hWnd, ocr_result);
 			}
@@ -289,7 +276,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_DESTROY:
 		KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
-		KillTimer(hWnd, START_TRANSLATE_DELAY_ID);
+		KillTimer(hWnd, START_TRANSLATE_TIMER_ID);
 		if (GetCapture() == hWnd)
 		{
 			ReleaseCapture();
@@ -310,7 +297,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			trans_result = cache_result;
 			dbgprintf(L"Translation cache hit for text: %s\n", ocr_result.c_str());
 		} else {
-			SetTimer(hWnd, START_TRANSLATE_DELAY_ID, START_TRANS_DELAY_MS, nullptr);
+			SetTimer(hWnd, START_TRANSLATE_TIMER_ID, START_TRANS_DELAY_MS, nullptr);
 		}
 		InvalidateRect(hWnd, nullptr, FALSE);
 		}
@@ -352,7 +339,7 @@ void RemoveTrayIcon()
         g_trayIconData.hIcon = nullptr;
     }
 }
-Screenshot screenshot;
+
 void ToggleMainWindow()
 {
 	if (!g_hMainWnd)
@@ -363,7 +350,7 @@ void ToggleMainWindow()
 	if (g_isWindowVisible)
 	{
 		KillTimer(g_hMainWnd, DRAG_CAPTURE_TIMER_ID);
-		KillTimer(g_hMainWnd, START_TRANSLATE_DELAY_ID);
+		KillTimer(g_hMainWnd, START_TRANSLATE_TIMER_ID);
 		if (GetCapture() == g_hMainWnd)
 		{
 			ReleaseCapture();
@@ -372,7 +359,25 @@ void ToggleMainWindow()
 		g_hasDragRect = FALSE;
 		if (!ocr_result.empty())
 		{
+			if (OpenClipboard(g_hMainWnd))
+			{
+				EmptyClipboard();
+				HGLOBAL hClipboardData = GlobalAlloc(GMEM_DDESHARE, (ocr_result.size() + 1) * sizeof(wchar_t));
+				if (hClipboardData)
+				{
+					wcscpy_s(static_cast<wchar_t*>(GlobalLock(hClipboardData)), ocr_result.size() + 1, ocr_result.c_str());
+					GlobalUnlock(hClipboardData);
+					SetClipboardData(CF_UNICODETEXT, hClipboardData);
+				}
+				CloseClipboard();
+			}
 			play_sound(ocr_result);
+		}
+		else
+		{
+			cv::Mat cut = GetDragRectMat();
+			if (!cut.empty())
+				back_ocr_and_play(cut);
 		}
 		screenshot.release();
 		ocr_result.clear();
@@ -425,14 +430,13 @@ RECT GetNormalizedDragRect()
 	return rect;
 }
 
-void SaveDragRect()
+cv::Mat GetDragRectMat()
 {
 	cv::Mat img = screenshot.getImgBuffer();
 	if (img.empty())
 	{
-		return;
+		return {};
 	}
-
 	RECT rect = GetNormalizedDragRect();
 	int x = std::max(0, static_cast<int>(rect.left));
 	int y = std::max(0, static_cast<int>(rect.top));
@@ -440,14 +444,19 @@ void SaveDragRect()
 	int bottom = std::min(img.rows, static_cast<int>(rect.bottom));
 	int width = right - x;
 	int height = bottom - y;
-
 	if (width <= 10 || height <= 10)
+	{
+		return {};
+	}
+	return img(cv::Rect(x, y, width, height)).clone();
+}
+void OCR_DragRect()
+{
+	cv::Mat cut = GetDragRectMat();
+	if (cut.empty())
 	{
 		return;
 	}
-
-	cv::Mat cut = img(cv::Rect(x, y, width, height));
-	//cv::imwrite("cut.webp", cut);
 	ocr_image(g_hMainWnd, cut);
 }
 
@@ -549,7 +558,8 @@ void Paint(HWND hWnd, HDC hdc)
 				&textRc,
 				DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
 			
-			FillRect(memDC, &textRc, blackBrush);
+			RECT backgroundRc{ textRc.left - 2, textRc.top - 2, textRc.right + 2, textRc.bottom + 2 };
+			FillRect(memDC, &backgroundRc, blackBrush);
 			DrawTextW(memDC, ocr_result.c_str(), -1, &textRc, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
 
 			if (!trans_result.empty()) {
@@ -559,8 +569,9 @@ void Paint(HWND hWnd, HDC hdc)
 					-1,
 					&transTextRc,
 					DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
-
-				FillRect(memDC, &transTextRc, blackBrush);
+				
+				backgroundRc = { transTextRc.left - 2, transTextRc.top - 2, transTextRc.right + 2, transTextRc.bottom + 2 };
+				FillRect(memDC, &backgroundRc, blackBrush);
 				DrawTextW(memDC, trans_result.c_str(), -1, &transTextRc, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
 			}
 		}
