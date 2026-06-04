@@ -17,7 +17,11 @@ private:
     httplib::Client cli{"https://dashscope.aliyuncs.com"};
     const std::string url = "/compatible-mode/v1";
 public:
-    AliTransClient() {}
+    AliTransClient() {
+        cli.set_connection_timeout(5);        // 连接超时
+        cli.set_read_timeout(10);             // 读超时（最常用）
+        cli.set_write_timeout(5);            // 写超时
+    }
 
     void set_api_key(const std::string& key) {
         api_key = key;
@@ -221,18 +225,19 @@ std::string url_encode(const std::string& s)
 std::wstring _ocr_image(const cv::Mat image) {
 	std::vector<uchar> webp_buffer;
 	std::vector<int> params = {
-		cv::IMWRITE_WEBP_QUALITY, 80   // 1~100，越大质量越好，文件越大
+		//cv::IMWRITE_WEBP_QUALITY, 80   // 1~100，越大质量越好，文件越大
 		// cv::IMWRITE_WEBP_LOSSLESS_MODE, 0  // 可选：无损模式（0=有损，1=无损）
+        cv::IMWRITE_PNG_COMPRESSION, 1
 	};
-	bool success = cv::imencode(".webp", image, webp_buffer, params);
+	bool success = cv::imencode(".png", image, webp_buffer, params);
 	if (success) {
-		dbgprintf("Image encoded to WebP successfully. Buffer size: %zu bytes\n", webp_buffer.size());
+		dbgprintf("Image encoded to PNG successfully. Buffer size: %zu bytes\n", webp_buffer.size());
 	}
 	else {
-		dbgprintf("Failed to encode image to WebP format.\n");
+		dbgprintf("Failed to encode image to PNG format.\n");
 		return L"";
 	}
-	auto res = ocr_client.Post(ocr_path, (char*)webp_buffer.data(), webp_buffer.size(), "image/webp");
+	auto res = ocr_client.Post(ocr_path, (char*)webp_buffer.data(), webp_buffer.size(), "image/png");
 	if (res) {
 		dbgprintf("OCR request completed with status: %d body %s\n", res->status, res->body.c_str());
 		auto json = nlohmann::json::parse(res->body);
@@ -380,6 +385,7 @@ public:
 RecentCache<wchar_t> translation_cache;
 void start_translation(HWND hWnd,std::wstring text) {
 	workthread.post([hWnd, text = std::move(text)] {
+		dbgprintf(L"Start translation, text: %s\n", text.c_str());
 		std::string utf8_text = wstring_to_utf8(text);
 		std::string translated = translate_with_ali(utf8_text);
 		std::wstring w_translated = utf8_to_wstring(translated);

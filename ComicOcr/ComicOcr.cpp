@@ -232,8 +232,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	case WM_MOUSEMOVE:
 		if (g_isDragging)
 		{
-			g_dragCurrentPoint.x = GET_X_LPARAM(lParam);
-			g_dragCurrentPoint.y = GET_Y_LPARAM(lParam);
+			const int x = GET_X_LPARAM(lParam);
+			const int y = GET_Y_LPARAM(lParam);
+			const int dx = x - g_dragCurrentPoint.x;
+			const int dy = y - g_dragCurrentPoint.y;
+			if (std::abs(dx) <= 2 && std::abs(dy) <= 2)
+			{
+				return 0;
+			}
+			g_dragCurrentPoint.x = x;
+			g_dragCurrentPoint.y = y;
 			g_hasDragRect = TRUE;
 			KillTimer(hWnd, DRAG_CAPTURE_TIMER_ID);
 			KillTimer(hWnd, START_TRANSLATE_TIMER_ID);
@@ -259,7 +267,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			OCR_DragRect();
 		}
 		if (wParam == START_TRANSLATE_TIMER_ID)
-		{
+		{	
+			dbgprintf("call WM_TIMER START_TRANSLATE_TIMER_ID\n");
 			KillTimer(hWnd, START_TRANSLATE_TIMER_ID);
 			if (!ocr_result.empty()) {
 				start_translation(hWnd, ocr_result);
@@ -297,7 +306,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			trans_result = cache_result;
 			dbgprintf(L"Translation cache hit for text: %s\n", ocr_result.c_str());
 		} else {
-			SetTimer(hWnd, START_TRANSLATE_TIMER_ID, START_TRANS_DELAY_MS, nullptr);
+			auto res=SetTimer(hWnd, START_TRANSLATE_TIMER_ID, START_TRANS_DELAY_MS, nullptr);
+			if (res == 0) {
+				dbgprintf(L"Failed to set translation timer: %d\n", GetLastError());
+			}
+			else {
+				dbgprintf(L"Translation timer set successfully\n");
+			}
 		}
 		InvalidateRect(hWnd, nullptr, FALSE);
 		}
@@ -448,7 +463,9 @@ cv::Mat GetDragRectMat()
 	{
 		return {};
 	}
-	return img(cv::Rect(x, y, width, height)).clone();
+	cv::Mat gray;
+	cv::cvtColor(img(cv::Rect(x, y, width, height)), gray, cv::COLOR_BGR2GRAY);
+	return gray;
 }
 void OCR_DragRect()
 {
