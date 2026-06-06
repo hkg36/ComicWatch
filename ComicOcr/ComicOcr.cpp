@@ -539,6 +539,11 @@ void Paint(HWND hWnd, HDC hdc)
 			DeleteObject(pen);
 			});
 		Rectangle(memDC, rect.left, rect.top, rect.right, rect.bottom);
+		//如果捕获范围底部低于屏幕的下1/5，上方小于屏幕的上1/5，则优先在上方显示识别结果，否则在下方显示
+		bool drawDownSide = true;
+		if (rect.bottom > imgSize.height * 4 / 5 && rect.top > imgSize.height / 5) {
+			drawDownSide = false;
+		}
 
 		HFONT hFont = CreateFontW(
 			32, 0, 0, 0,
@@ -568,24 +573,33 @@ void Paint(HWND hWnd, HDC hdc)
 			const int textMaxWidth = imgSize.width - rect.left;
 			const int textMaxHeight = 300;
 
-			RECT textRc{ textX, textY, textX + textMaxWidth, textY + textMaxHeight };
+			RECT textRc = { textX, textY, textX + textMaxWidth, textY + textMaxHeight };
+			
 			int height = DrawTextW(memDC,
 				ocr_result.c_str(),
 				-1,
 				&textRc,
 				DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
+			if(drawDownSide==false) {
+				textRc.top = rect.top - 5 - height;
+				textRc.bottom = rect.top - 5;
+			}
 			
 			RECT backgroundRc{ textRc.left - 2, textRc.top - 2, textRc.right + 2, textRc.bottom + 2 };
 			FillRect(memDC, &backgroundRc, blackBrush);
 			DrawTextW(memDC, ocr_result.c_str(), -1, &textRc, DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK);
 
 			if (!trans_result.empty()) {
-				RECT transTextRc{ textX, textRc.bottom + 5, textX + textMaxWidth, textRc.bottom + 5 + textMaxHeight };
+				RECT transTextRc = { textX, textRc.bottom + 5, textX + textMaxWidth, textRc.bottom + 5 + textMaxHeight };
 				int transHeight = DrawTextW(memDC,
 					trans_result.c_str(),
 					-1,
 					&transTextRc,
 					DT_LEFT | DT_TOP | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
+				if (drawDownSide == false) {
+					transTextRc.top = textRc.top - 5 - transHeight;
+					transTextRc.bottom = textRc.top - 5;
+				}
 				
 				backgroundRc = { transTextRc.left - 2, transTextRc.top - 2, transTextRc.right + 2, transTextRc.bottom + 2 };
 				FillRect(memDC, &backgroundRc, blackBrush);
