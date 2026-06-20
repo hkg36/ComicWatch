@@ -12,9 +12,9 @@
 #include <cwctype>
 #include <zip.h>
 #ifdef _DEBUG
-#pragma comment(lib, "opencv_world4120d.lib")
+#pragma comment(lib, "opencv_world500d.lib")
 #else
-#pragma comment(lib, "opencv_world4120.lib")
+#pragma comment(lib, "opencv_world500.lib")
 #endif
 #pragma comment(lib,"zip.lib")
 #include "MessageThread.h"
@@ -679,9 +679,13 @@ bool move_file_to_recycle_bin(const std::wstring& path) {
 
     return SHFileOperationW(&op) == 0 && !op.fAnyOperationsAborted;
 }
-
+ULONGLONG lastDeleteTick = 0;
 void delete_current_zip() {
 	assert(mode == FileMode_Zip);
+	if (GetTickCount64() - lastDeleteTick < 1000*3) {
+		g_worker.statusMessage = L"请勿频繁删除文件!";
+		return;
+	}
     if (g_worker.zipIndex < 0 || g_worker.zipIndex >= (int)g_worker.zipFiles.size()) return;
 
     int oldIndex = g_worker.zipIndex;
@@ -689,6 +693,7 @@ void delete_current_zip() {
     std::wstring deletingPath = g_worker.zipFiles[oldIndex];
 
     if (!move_file_to_recycle_bin(deletingPath)) return;
+	lastDeleteTick = GetTickCount64();
 
     g_worker.zipFiles.erase(g_worker.zipFiles.begin() + oldIndex);
 
@@ -724,6 +729,10 @@ void delete_current_zip() {
 void delete_current_folder() {
     assert(mode == FileMode_Folder);
 	if(g_fileWorker.currentFolder.empty()) return;
+	if (GetTickCount64() - lastDeleteTick < 1000 * 3) {
+		g_fileWorker.statusMessage = L"请勿频繁删除文件!";
+		return;
+	}
     std::wstring deletingPath = g_fileWorker.currentFolder;
     close_open_archive();
     if (!move_file_to_recycle_bin(deletingPath)) return;
@@ -735,6 +744,7 @@ void delete_current_folder() {
     g_fileWorker.preloadCache.clear();
 	g_fileWorker.statusMessage = L"当前文件夹已删除:\n" + deletingPath;
 	dbgprintf(L"Deleted folder: %s\n", deletingPath.c_str());
+	lastDeleteTick = GetTickCount64();
 }
 
 void CheckPreloadCacheNeedClear();

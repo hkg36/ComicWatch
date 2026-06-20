@@ -1,11 +1,6 @@
 #include "framework.h"
 #include "ScreenShot.h"
 
-#ifdef _DEBUG
-#pragma comment(lib, "opencv_world4120d.lib")
-#else
-#pragma comment(lib, "opencv_world4120.lib")
-#endif
 /* 获取整个屏幕的截图 */
 cv::Mat Screenshot::getScreenshot()
 {
