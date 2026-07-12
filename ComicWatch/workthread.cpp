@@ -681,11 +681,14 @@ bool move_file_to_recycle_bin(const std::wstring& path) {
 }
 ULONGLONG lastDeleteTick = 0;
 void delete_current_zip() {
-	assert(mode == FileMode_Zip);
-	if (GetTickCount64() - lastDeleteTick < 1000*3) {
-		g_worker.statusMessage = L"请勿频繁删除文件!";
-		return;
-	}
+    assert(mode == FileMode_Zip);
+    if (g_worker.zipIndex < 3 && g_worker.zipIndex < ((int)g_worker.zipFiles.size() - 1))
+    {
+        if (GetTickCount64() - lastDeleteTick < 1000 * 3) {
+            g_worker.statusMessage = L"请勿频繁删除文件!";
+            return;
+        }
+    }
     if (g_worker.zipIndex < 0 || g_worker.zipIndex >= (int)g_worker.zipFiles.size()) return;
 
     int oldIndex = g_worker.zipIndex;
@@ -729,10 +732,6 @@ void delete_current_zip() {
 void delete_current_folder() {
     assert(mode == FileMode_Folder);
 	if(g_fileWorker.currentFolder.empty()) return;
-	if (GetTickCount64() - lastDeleteTick < 1000 * 3) {
-		g_fileWorker.statusMessage = L"请勿频繁删除文件!";
-		return;
-	}
     std::wstring deletingPath = g_fileWorker.currentFolder;
     close_open_archive();
     if (!move_file_to_recycle_bin(deletingPath)) return;
@@ -744,7 +743,6 @@ void delete_current_folder() {
     g_fileWorker.preloadCache.clear();
 	g_fileWorker.statusMessage = L"当前文件夹已删除:\n" + deletingPath;
 	dbgprintf(L"Deleted folder: %s\n", deletingPath.c_str());
-	lastDeleteTick = GetTickCount64();
 }
 
 void CheckPreloadCacheNeedClear();

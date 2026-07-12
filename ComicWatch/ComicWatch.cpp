@@ -573,7 +573,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ui_open_by_dialog(hWnd);
         }
         break;
-
+	case WM_MBUTTONUP:
+        ui_open_by_dialog(hWnd);
+		break;
     case WM_RBUTTONUP:
     {
         POINT pt;
