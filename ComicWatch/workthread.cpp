@@ -682,7 +682,7 @@ bool move_file_to_recycle_bin(const std::wstring& path) {
 ULONGLONG lastDeleteTick = 0;
 void delete_current_zip() {
     assert(mode == FileMode_Zip);
-    if (g_worker.zipIndex < 3 && g_worker.zipIndex < ((int)g_worker.zipFiles.size() - 1))
+    if (g_worker.imageIndex < 3 && g_worker.imageIndex < ((int)g_worker.imageEntries.size() - 1))
     {
         if (GetTickCount64() - lastDeleteTick < 1000 * 3) {
             g_worker.statusMessage = L"请勿频繁删除文件!";
