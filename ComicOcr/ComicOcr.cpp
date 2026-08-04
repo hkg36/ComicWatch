@@ -12,6 +12,17 @@
 
 #define MAX_LOADSTRING 100
 
+#ifdef _DEBUG
+#pragma comment(lib, "opencv_world500d.lib")
+#else
+#pragma comment(lib, "opencv_world500.lib")
+#endif
+#pragma comment(lib,"zip.lib")
+#pragma comment(lib,"zlib.lib")
+#pragma comment(lib,"libcrypto.lib")
+#pragma comment(lib,"libssl.lib")
+#pragma comment(lib,"Winmm.lib")
+
 extern MessageThread workthread;
 // 全局变量:
 HINSTANCE hInst;                                // 当前实例
