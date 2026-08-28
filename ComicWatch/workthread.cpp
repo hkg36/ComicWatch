@@ -10,13 +10,15 @@
 #include <vector>
 #include <shellapi.h>
 #include <cwctype>
-#include <zip.h>
+#include <archive.h>
+#include <archive_entry.h>
 #ifdef _DEBUG
 #pragma comment(lib, "opencv_world500d.lib")
+#pragma comment(lib,"archive.lib")
 #else
 #pragma comment(lib, "opencv_world500.lib")
+#pragma comment(lib,"archive.lib")
 #endif
-#pragma comment(lib,"zip.lib")
 #include "MessageThread.h"
 
 MessageThread g_messageThread;
@@ -24,46 +26,94 @@ namespace fs = std::filesystem;
 std::string utf8path(const std::wstring& wpath);
 
 struct WorkerState {
-    std::vector<std::wstring> zipFiles;
-    std::wstring currentFolder;
-    int zipIndex = -1;
+	std::vector<std::wstring> zipFiles;
+	std::wstring currentFolder;
+	int zipIndex = -1;
 
-    std::vector<std::string> imageEntries;
-    int imageIndex = -1;
-    cv::Mat currentImage;
-    std::wstring statusMessage;
-    std::set<std::wstring> badImageEntries;
+	std::vector<std::string> imageEntries;
+	int imageIndex = -1;
+	cv::Mat currentImage;
+	std::wstring statusMessage;
+	std::set<std::wstring> badImageEntries;
 
-    std::map<int, cv::Mat> preloadCache;
+	std::map<int, cv::Mat> preloadCache;
 
-    zip_t* archive = nullptr;
-    bool archiveOpened = false;
-    std::wstring archiveZipPath;
+	bool archiveOpened = false;
+	std::wstring archiveZipPath;
 } g_worker;
 
 struct FileWorkerState {
-    std::wstring currentFolder;
-    int zipIndex = -1;
-    std::vector<std::wstring> imageFiles;
-    int imageIndex = -1;
-    cv::Mat currentImage;
-    std::wstring statusMessage;
-    std::set<std::wstring> badImageEntries;
-    std::map<int, cv::Mat> preloadCache;
-    bool folderOpened = false;
+	std::wstring currentFolder;
+	int zipIndex = -1;
+	std::vector<std::wstring> imageFiles;
+	int imageIndex = -1;
+	cv::Mat currentImage;
+	std::wstring statusMessage;
+	std::set<std::wstring> badImageEntries;
+	std::map<int, cv::Mat> preloadCache;
+	bool folderOpened = false;
 } g_fileWorker;
 enum FileMode{
-    FileMode_None,
-    FileMode_Zip,
+	FileMode_None,
+	FileMode_Zip,
 	FileMode_Folder
 };
 FileMode mode = FileMode_None;
+
+archive* create_archive_reader() {
+	archive* reader = archive_read_new();
+	if (!reader) {
+		return nullptr;
+	}
+
+	archive_read_support_filter_all(reader);
+	archive_read_support_format_all(reader);
+	return reader;
+}
+
+bool open_archive_reader(archive* reader, const std::wstring& archivePath) {
+#ifdef _WIN32
+	return reader && archive_read_open_filename_w(reader, archivePath.c_str(), 10240) == ARCHIVE_OK;
+#else
+	return reader && archive_read_open_filename(reader, utf8path(archivePath).c_str(), 10240) == ARCHIVE_OK;
+#endif
+}
+
+std::string get_archive_entry_name(archive_entry* entry) {
+	const char* path = archive_entry_pathname_utf8(entry);
+	if (!path) {
+		path = archive_entry_pathname(entry);
+	}
+	return path ? std::string(path) : std::string();
+}
+
+bool is_archive_directory(archive_entry* entry) {
+	if (archive_entry_filetype(entry) == AE_IFDIR) {
+		return true;
+	}
+
+	std::string path = get_archive_entry_name(entry);
+	return !path.empty() && (path.back() == '/' || path.back() == '\\');
+}
+
+bool read_current_archive_entry(archive* reader, std::vector<unsigned char>& buffer) {
+	buffer.clear();
+
+	unsigned char chunk[16 * 1024];
+	while (true) {
+		la_ssize_t size = archive_read_data(reader, chunk, sizeof(chunk));
+		if (size == 0) {
+			return true;
+		}
+		if (size < 0) {
+			return false;
+		}
+		buffer.insert(buffer.end(), chunk, chunk + size);
+	}
+}
+
 void close_open_archive() {
 	if (g_worker.archiveOpened) {
-		if (g_worker.archive) {
-			zip_close(g_worker.archive);
-			g_worker.archive = nullptr;
-		}
 		g_worker.currentImage.release();
 		g_worker.archiveOpened = false;
 		g_worker.archiveZipPath.clear();
@@ -84,13 +134,17 @@ bool open_archive_for_zip(const std::wstring& zipPath) {
 	}
 
 	close_open_archive();
-	int err = 0;
-	zip_t* archive = zip_open(utf8path(zipPath).c_str(), ZIP_RDONLY, &err);
-	if (!archive) {
+	archive* reader = create_archive_reader();
+	if (!reader) {
 		return false;
 	}
 
-	g_worker.archive = archive;
+	bool opened = open_archive_reader(reader, zipPath);
+	archive_read_free(reader);
+	if (!opened) {
+		return false;
+	}
+
 	g_worker.archiveOpened = true;
 	g_worker.archiveZipPath = zipPath;
 	return true;
@@ -148,6 +202,64 @@ bool is_supported_image_file(const std::wstring& name) {
         if (ext == s) return true;
     }
     return false;
+}
+
+bool is_supported_archive_file(const std::wstring& name) {
+    static const wchar_t* support_ext[] = { L".zip", L".rar" };
+    auto dot = name.find_last_of(L'.');
+    if (dot == std::wstring::npos) return false;
+    std::wstring ext = string_lower(name.substr(dot));
+    for (const auto* s : support_ext) {
+        if (ext == s) return true;
+    }
+    return false;
+}
+
+bool enumerate_image_entries_in_archive(const std::wstring& archivePath, std::vector<std::string>& entries) {
+    entries.clear();
+
+    archive* reader = create_archive_reader();
+    if (!reader) {
+        return false;
+    }
+
+    bool success = false;
+    if (open_archive_reader(reader, archivePath)) {
+        success = true;
+        archive_entry* entry = nullptr;
+        while (archive_read_next_header(reader, &entry) == ARCHIVE_OK) {
+            std::string filename = get_archive_entry_name(entry);
+            if (!filename.empty() && !is_archive_directory(entry) && is_supported_image_file(filename)) {
+                entries.push_back(std::move(filename));
+            }
+            archive_read_data_skip(reader);
+        }
+    }
+
+    archive_read_free(reader);
+    return success;
+}
+
+bool read_image_entry_from_archive(const std::wstring& archivePath, const std::string& entryName, std::vector<unsigned char>& buffer) {
+    archive* reader = create_archive_reader();
+    if (!reader) {
+        return false;
+    }
+
+    bool success = false;
+    if (open_archive_reader(reader, archivePath)) {
+        archive_entry* entry = nullptr;
+        while (archive_read_next_header(reader, &entry) == ARCHIVE_OK) {
+            if (get_archive_entry_name(entry) == entryName && !is_archive_directory(entry)) {
+                success = read_current_archive_entry(reader, buffer);
+                break;
+            }
+            archive_read_data_skip(reader);
+        }
+    }
+
+    archive_read_free(reader);
+    return success;
 }
 
 template <typename T>
@@ -237,21 +349,20 @@ void fill_snapshot(WorkerSnapshot& snapshot) {
 
 void scan_zip_files_in_folder(const std::wstring& folder) {
 	assert(mode == FileMode_Zip);
-    g_worker.zipFiles.clear();
-    g_worker.currentFolder = folder;
+	g_worker.zipFiles.clear();
+	g_worker.currentFolder = folder;
 
-    std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(folder, ec)) {
-        if (ec) break;
-        if (!entry.is_regular_file()) continue;
-        auto ext = string_lower(entry.path().extension().wstring());
-        if (ext == L".zip") {
-            g_worker.zipFiles.push_back(entry.path().wstring());
-        }
-    }
+	std::error_code ec;
+	for (const auto& entry : fs::directory_iterator(folder, ec)) {
+		if (ec) break;
+		if (!entry.is_regular_file()) continue;
+		if (is_supported_archive_file(entry.path().filename().wstring())) {
+			g_worker.zipFiles.push_back(entry.path().wstring());
+		}
+	}
 
-    std::sort(g_worker.zipFiles.begin(), g_worker.zipFiles.end(),
-        [](const std::wstring& a, const std::wstring& b) { return natural_less_icase(a, b); });
+	std::sort(g_worker.zipFiles.begin(), g_worker.zipFiles.end(),
+		[](const std::wstring& a, const std::wstring& b) { return natural_less_icase(a, b); });
 }
 void scan_images_in_folder(const std::wstring& folder)
 {
@@ -292,76 +403,64 @@ bool decode_image_from_zip_entry(const std::wstring& zipPath, const std::string&
 		g_worker.badImageEntries.insert(std::move(badKey));
 		return false;
 	}
-	dbgprintf("Decoding image from ZIP: %s, entry: %s\n", zipPath.c_str(), entryName.c_str());
-	zip_stat_t st{};
-	if (zip_stat(g_worker.archive, entryName.c_str(), ZIP_FL_ENC_UTF_8, &st) != 0 || st.size <= 0) {
+	dbgprintf("Decoding image from archive: %s, entry: %s\n", zipPath.c_str(), entryName.c_str());
+
+	std::vector<unsigned char> buffer;
+	if (!read_image_entry_from_archive(zipPath, entryName, buffer) || buffer.empty()) {
 		g_worker.badImageEntries.insert(std::move(badKey));
 		return false;
 	}
 
-	zip_file_t* file = zip_fopen(g_worker.archive, entryName.c_str(), ZIP_FL_ENC_UTF_8);
-	if (!file) {
+	dbgprintf("Read %zu bytes from archive entry: %s\n", buffer.size(), entryName.c_str());
+	cv::Mat img = cv::imdecode(buffer, cv::IMREAD_UNCHANGED);
+	if (img.empty()) {
 		g_worker.badImageEntries.insert(std::move(badKey));
+		if (outStatus) {
+			*outStatus = L"图片解码失败(已加入损坏列表):\n" + utf8_to_wstring(entryName) + L"\n压缩包: " + zipPath;
+		}
 		return false;
 	}
 
-	std::vector<unsigned char> buffer((size_t)st.size);
-	zip_int64_t readSize = zip_fread(file, buffer.data(), buffer.size());
-	zip_fclose(file);
-	if (readSize < 0 || static_cast<zip_uint64_t>(readSize) != st.size) {
+	cv::Mat img8;
+	if (img.depth() == CV_8U) {
+		img8 = img;
+	}
+	else if (img.depth() == CV_16U) {
+		img.convertTo(img8, CV_MAKETYPE(CV_8U, img.channels()), 1.0 / 256.0);
+	}
+	else {
+		cv::Mat tmp;
+		double minV = 0.0, maxV = 0.0;
+		cv::minMaxLoc(img.reshape(1), &minV, &maxV);
+		if (maxV > minV) {
+			img.convertTo(tmp, CV_MAKETYPE(CV_8U, img.channels()), 255.0 / (maxV - minV), -minV * 255.0 / (maxV - minV));
+		}
+		else {
+			img.convertTo(tmp, CV_MAKETYPE(CV_8U, img.channels()));
+		}
+		img8 = tmp;
+	}
+
+	cv::Mat bgra;
+	if (img8.channels() == 4) {
+		bgra = img8;
+	}
+	else if (img8.channels() == 3) {
+		cv::cvtColor(img8, bgra, cv::COLOR_BGR2BGRA);
+	}
+	else if (img8.channels() == 1) {
+		cv::cvtColor(img8, bgra, cv::COLOR_GRAY2BGRA);
+	}
+	else {
 		g_worker.badImageEntries.insert(std::move(badKey));
+		if (outStatus) {
+			*outStatus = L"图片通道数不受支持(已加入损坏列表):\n" + utf8_to_wstring(entryName) + L"\n压缩包: " + zipPath;
+		}
 		return false;
 	}
-    dbgprintf("Read %lld bytes from ZIP entry: %s\n", readSize, entryName.c_str());
-    cv::Mat img = cv::imdecode(buffer, cv::IMREAD_UNCHANGED);
-    if (img.empty()) {
-        g_worker.badImageEntries.insert(std::move(badKey));
-        if (outStatus) {
-            *outStatus = L"图片解码失败(已加入损坏列表):\n" + utf8_to_wstring(entryName) + L"\nZIP: " + zipPath;
-        }
-        return false;
-    }
-
-    cv::Mat img8;
-    if (img.depth() == CV_8U) {
-        img8 = img;
-    }
-    else if (img.depth() == CV_16U) {
-        img.convertTo(img8, CV_MAKETYPE(CV_8U, img.channels()), 1.0 / 256.0);
-    }
-    else {
-        cv::Mat tmp;
-        double minV = 0.0, maxV = 0.0;
-        cv::minMaxLoc(img.reshape(1), &minV, &maxV);
-        if (maxV > minV) {
-            img.convertTo(tmp, CV_MAKETYPE(CV_8U, img.channels()), 255.0 / (maxV - minV), -minV * 255.0 / (maxV - minV));
-        }
-        else {
-            img.convertTo(tmp, CV_MAKETYPE(CV_8U, img.channels()));
-        }
-        img8 = tmp;
-    }
-
-    cv::Mat bgra;
-    if (img8.channels() == 4) {
-        bgra = img8;
-    }
-    else if (img8.channels() == 3) {
-        cv::cvtColor(img8, bgra, cv::COLOR_BGR2BGRA);
-    }
-    else if (img8.channels() == 1) {
-        cv::cvtColor(img8, bgra, cv::COLOR_GRAY2BGRA);
-    }
-    else {
-        g_worker.badImageEntries.insert(std::move(badKey));
-        if (outStatus) {
-            *outStatus = L"图片通道数不受支持(已加入损坏列表):\n" + utf8_to_wstring(entryName) + L"\nZIP: " + zipPath;
-        }
-        return false;
-    }
-	dbgprintf("Decoded image from ZIP: %s, size: %d x %d, channels: %d\n", entryName.c_str(), bgra.cols, bgra.rows, bgra.channels());
-    outImage = bgra;
-    return true;
+	dbgprintf("Decoded image from archive: %s, size: %d x %d, channels: %d\n", entryName.c_str(), bgra.cols, bgra.rows, bgra.channels());
+	outImage = bgra;
+	return true;
 }
 bool decode_imagefile(const std::wstring& filePath, cv::Mat& outImage, std::wstring* outStatus = nullptr) {
 	assert(mode == FileMode_Folder);
@@ -572,42 +671,29 @@ bool open_zip_at(int index) {
 	if (!open_archive_for_zip(zipPath)) return false;
 
 	std::vector<std::string> entries;
-	zip_int64_t numEntries = zip_get_num_entries(g_worker.archive, ZIP_FL_UNCHANGED);
-	if (numEntries < 0) {
+	if (!enumerate_image_entries_in_archive(zipPath, entries)) {
 		return false;
 	}
 
-	for (zip_uint64_t i = 0; i < static_cast<zip_uint64_t>(numEntries); ++i) {
-		zip_stat_t st{};
-		if (zip_stat_index(g_worker.archive, i, ZIP_FL_ENC_UTF_8, &st) != 0) continue;
-		if (!st.name) continue;
+	if (entries.empty()) return false;
 
-		std::string filename(st.name);
-		if (filename.empty() || filename.back() == '/') continue;
-		if (is_supported_image_file(filename)) {
-			entries.push_back(filename);
+	std::sort(entries.begin(), entries.end(),
+		[](const std::string& a, const std::string& b) { return natural_less_icase(a, b); });
+
+	g_worker.zipIndex = index;
+	g_worker.imageEntries = std::move(entries);
+	g_worker.imageIndex = -1;
+	g_worker.preloadCache.clear();
+
+	for (int i = 0; i < (int)g_worker.imageEntries.size(); ++i) {
+		g_worker.imageIndex = i;
+		if (load_current_image()) {
+			return true;
 		}
 	}
 
-    if (entries.empty()) return false;
-
-    std::sort(entries.begin(), entries.end(),
-        [](const std::string& a, const std::string& b) { return natural_less_icase(a, b); });
-
-    g_worker.zipIndex = index;
-    g_worker.imageEntries = std::move(entries);
-    g_worker.imageIndex = -1;
-    g_worker.preloadCache.clear();
-
-    for (int i = 0; i < (int)g_worker.imageEntries.size(); ++i) {
-        g_worker.imageIndex = i;
-        if (load_current_image()) {
-            return true;
-        }
-    }
-
-    g_worker.statusMessage = L"当前ZIP内图片均不可读取(已跳过):\n" + g_worker.zipFiles[g_worker.zipIndex];
-    return false;
+	g_worker.statusMessage = L"当前压缩包内图片均不可读取(已跳过):\n" + g_worker.zipFiles[g_worker.zipIndex];
+	return false;
 }
 
 bool open_zip_by_step(int startIndex, int step) {
@@ -724,10 +810,10 @@ void delete_current_zip() {
             open_zip_at(0);
             return;
         }
-        else {
-			g_worker.statusMessage = L"当前文件夹内无ZIP文件:\n" + g_worker.currentFolder;
-        }
-    }
+		else {
+			g_worker.statusMessage = L"当前文件夹内无压缩文件:\n" + g_worker.currentFolder;
+		}
+	}
 }
 void delete_current_folder() {
     assert(mode == FileMode_Folder);
@@ -748,7 +834,7 @@ void delete_current_folder() {
 void CheckPreloadCacheNeedClear();
 void PreloadNeighbors();
 std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
-    if (filePath.ends_with(L".zip")) {
+    if (is_supported_archive_file(filePath)) {
         return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
             mode = FileMode_Zip;
             std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();

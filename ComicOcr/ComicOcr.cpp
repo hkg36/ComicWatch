@@ -14,11 +14,12 @@
 
 #ifdef _DEBUG
 #pragma comment(lib, "opencv_world500d.lib")
+#pragma comment(lib,"zd.lib")
 #else
 #pragma comment(lib, "opencv_world500.lib")
+#pragma comment(lib,"z.lib")
 #endif
 #pragma comment(lib,"zip.lib")
-#pragma comment(lib,"zlib.lib")
 #pragma comment(lib,"libcrypto.lib")
 #pragma comment(lib,"libssl.lib")
 #pragma comment(lib,"Winmm.lib")

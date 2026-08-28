@@ -327,7 +327,7 @@ std::wstring OpenFileDialog(HWND hWnd) {
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = _T("Support Files\0*.zip;*.jpg;*.jpeg;*.png;*.bmp;*.webp\0");
+    ofn.lpstrFilter = _T("Support Files\0*.zip;*.rar;*.jpg;*.jpeg;*.png;*.bmp;*.webp\0");
     ofn.nFilterIndex = 1;
     ofn.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
