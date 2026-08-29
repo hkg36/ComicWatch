@@ -13,10 +13,14 @@
 #include <archive.h>
 #include <archive_entry.h>
 #ifdef _DEBUG
-#pragma comment(lib, "opencv_world500d.lib")
+#pragma comment(lib, "opencv_core4d.lib")
+#pragma comment(lib, "opencv_imgcodecs4d.lib")
+#pragma comment(lib, "opencv_imgproc4d.lib")
 #pragma comment(lib,"archive.lib")
 #else
-#pragma comment(lib, "opencv_world500.lib")
+#pragma comment(lib, "opencv_core4.lib")
+#pragma comment(lib, "opencv_imgcodecs4.lib")
+#pragma comment(lib, "opencv_imgproc4.lib")
 #pragma comment(lib,"archive.lib")
 #endif
 #include "MessageThread.h"
