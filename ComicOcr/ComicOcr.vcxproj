@@ -71,12 +71,12 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>E:\vcpkg\installed\x64-windows\include;E:\vcpkg\installed\x64-windows\include\opencv4;D:\VS_Link\cpplibs\include;$(IncludePath)</IncludePath>
-    <LibraryPath>E:\vcpkg\installed\x64-windows\debug\lib;D:\VS_Link\cpplibs\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>E:\vcpkg\installed\x64-windows\include\opencv4;D:\VS_Link\cpplibs\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\VS_Link\cpplibs\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <IncludePath>E:\vcpkg\installed\x64-windows\include;E:\vcpkg\installed\x64-windows\include\opencv4;D:\VS_Link\cpplibs\include;$(IncludePath)</IncludePath>
-    <LibraryPath>E:\vcpkg\installed\x64-windows\lib;D:\VS_Link\cpplibs\lib;$(LibraryPath)</LibraryPath>
+    <IncludePath>E:\vcpkg\installed\x64-windows\include\opencv4;D:\VS_Link\cpplibs\include;$(IncludePath)</IncludePath>
+    <LibraryPath>D:\VS_Link\cpplibs\lib;$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

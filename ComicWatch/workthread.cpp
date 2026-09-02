@@ -8,20 +8,24 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <memory>
+#include <cstdint>
 #include <shellapi.h>
 #include <cwctype>
-#include <archive.h>
-#include <archive_entry.h>
+
+#include <bit7z/bit7z.hpp>
+#include <bit7z/bitarchivereader.hpp>
+
 #ifdef _DEBUG
 #pragma comment(lib, "opencv_core4d.lib")
 #pragma comment(lib, "opencv_imgcodecs4d.lib")
 #pragma comment(lib, "opencv_imgproc4d.lib")
-#pragma comment(lib,"archive.lib")
+#pragma comment(lib,"bit7z64_d.lib")
 #else
 #pragma comment(lib, "opencv_core4.lib")
 #pragma comment(lib, "opencv_imgcodecs4.lib")
 #pragma comment(lib, "opencv_imgproc4.lib")
-#pragma comment(lib,"archive.lib")
+#pragma comment(lib,"bit7z64.lib")
 #endif
 #include "MessageThread.h"
 
@@ -35,6 +39,7 @@ struct WorkerState {
 	int zipIndex = -1;
 
 	std::vector<std::string> imageEntries;
+	std::map<std::string, std::uint32_t> imageEntryIndexMap;
 	int imageIndex = -1;
 	cv::Mat currentImage;
 	std::wstring statusMessage;
@@ -42,6 +47,7 @@ struct WorkerState {
 
 	std::map<int, cv::Mat> preloadCache;
 
+	std::unique_ptr<bit7z::BitArchiveReader> archiveReader;
 	bool archiveOpened = false;
 	std::wstring archiveZipPath;
 } g_worker;
@@ -64,63 +70,35 @@ enum FileMode{
 };
 FileMode mode = FileMode_None;
 
-archive* create_archive_reader() {
-	archive* reader = archive_read_new();
-	if (!reader) {
-		return nullptr;
-	}
-
-	archive_read_support_filter_all(reader);
-	archive_read_support_format_all(reader);
-	return reader;
+const bit7z::Bit7zLibrary& get_bit7z_library() {
+	static const bit7z::Bit7zLibrary library(bit7z::kDefaultLibrary);
+	return library;
 }
 
-bool open_archive_reader(archive* reader, const std::wstring& archivePath) {
+const bit7z::BitInFormat& get_archive_format(const std::wstring& archivePath) {
+	std::wstring ext = fs::path(archivePath).extension().wstring();
+	std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+	if (ext == L".rar") {
+		return bit7z::BitFormat::Rar;
+	}
+	return bit7z::BitFormat::Zip;
+}
+
+std::string archive_item_path_utf8(const bit7z::BitArchiveItem& item) {
 #ifdef _WIN32
-	return reader && archive_read_open_filename_w(reader, archivePath.c_str(), 10240) == ARCHIVE_OK;
+	return utf8path(item.nativePath());
 #else
-	return reader && archive_read_open_filename(reader, utf8path(archivePath).c_str(), 10240) == ARCHIVE_OK;
+	return item.nativePath();
 #endif
-}
-
-std::string get_archive_entry_name(archive_entry* entry) {
-	const char* path = archive_entry_pathname_utf8(entry);
-	if (!path) {
-		path = archive_entry_pathname(entry);
-	}
-	return path ? std::string(path) : std::string();
-}
-
-bool is_archive_directory(archive_entry* entry) {
-	if (archive_entry_filetype(entry) == AE_IFDIR) {
-		return true;
-	}
-
-	std::string path = get_archive_entry_name(entry);
-	return !path.empty() && (path.back() == '/' || path.back() == '\\');
-}
-
-bool read_current_archive_entry(archive* reader, std::vector<unsigned char>& buffer) {
-	buffer.clear();
-
-	unsigned char chunk[16 * 1024];
-	while (true) {
-		la_ssize_t size = archive_read_data(reader, chunk, sizeof(chunk));
-		if (size == 0) {
-			return true;
-		}
-		if (size < 0) {
-			return false;
-		}
-		buffer.insert(buffer.end(), chunk, chunk + size);
-	}
 }
 
 void close_open_archive() {
 	if (g_worker.archiveOpened) {
 		g_worker.currentImage.release();
+		g_worker.archiveReader.reset();
 		g_worker.archiveOpened = false;
 		g_worker.archiveZipPath.clear();
+		g_worker.imageEntryIndexMap.clear();
 		g_worker.badImageEntries.clear();
 		g_worker.preloadCache.clear();
 	}
@@ -133,19 +111,19 @@ void close_open_archive() {
 }
 
 bool open_archive_for_zip(const std::wstring& zipPath) {
-	if (g_worker.archiveOpened && g_worker.archiveZipPath == zipPath) {
+	if (g_worker.archiveOpened && g_worker.archiveZipPath == zipPath && g_worker.archiveReader) {
 		return true;
 	}
 
 	close_open_archive();
-	archive* reader = create_archive_reader();
-	if (!reader) {
-		return false;
+	try {
+		const auto& library = get_bit7z_library();
+		const auto& format = get_archive_format(zipPath);
+		g_worker.archiveReader = std::make_unique<bit7z::BitArchiveReader>(library, bit7z::to_tstring(zipPath), format);
 	}
-
-	bool opened = open_archive_reader(reader, zipPath);
-	archive_read_free(reader);
-	if (!opened) {
+	catch (const bit7z::BitException& ex) {
+		dbgprintf("Open archive failed: %ls, reason: %s\n", zipPath.c_str(), ex.what());
+		g_worker.archiveReader.reset();
 		return false;
 	}
 
@@ -219,51 +197,63 @@ bool is_supported_archive_file(const std::wstring& name) {
     return false;
 }
 
-bool enumerate_image_entries_in_archive(const std::wstring& archivePath, std::vector<std::string>& entries) {
+bool enumerate_image_entries_in_archive(std::vector<std::string>& entries) {
     entries.clear();
+    g_worker.imageEntryIndexMap.clear();
 
-    archive* reader = create_archive_reader();
-    if (!reader) {
+    if (!g_worker.archiveOpened || !g_worker.archiveReader) {
         return false;
     }
 
-    bool success = false;
-    if (open_archive_reader(reader, archivePath)) {
-        success = true;
-        archive_entry* entry = nullptr;
-        while (archive_read_next_header(reader, &entry) == ARCHIVE_OK) {
-            std::string filename = get_archive_entry_name(entry);
-            if (!filename.empty() && !is_archive_directory(entry) && is_supported_image_file(filename)) {
-                entries.push_back(std::move(filename));
+    try {
+        for (const auto& item : *g_worker.archiveReader) {
+            if (item.isDir()) {
+                continue;
             }
-            archive_read_data_skip(reader);
-        }
-    }
 
-    archive_read_free(reader);
-    return success;
+            std::string filename = archive_item_path_utf8(item);
+            if (!filename.empty() && is_supported_image_file(filename)) {
+                entries.push_back(filename);
+                g_worker.imageEntryIndexMap[filename] = static_cast<std::uint32_t>(item.index());
+            }
+        }
+        return true;
+    }
+    catch (const bit7z::BitException& ex) {
+        dbgprintf("Enumerate archive entries failed: %ls, reason: %s\n", g_worker.archiveZipPath.c_str(), ex.what());
+        entries.clear();
+        g_worker.imageEntryIndexMap.clear();
+        return false;
+    }
 }
 
-bool read_image_entry_from_archive(const std::wstring& archivePath, const std::string& entryName, std::vector<unsigned char>& buffer) {
-    archive* reader = create_archive_reader();
-    if (!reader) {
+bool read_image_entry_from_archive(const std::string& entryName, std::vector<unsigned char>& buffer) {
+    buffer.clear();
+
+    if (!g_worker.archiveOpened || !g_worker.archiveReader) {
         return false;
     }
 
-    bool success = false;
-    if (open_archive_reader(reader, archivePath)) {
-        archive_entry* entry = nullptr;
-        while (archive_read_next_header(reader, &entry) == ARCHIVE_OK) {
-            if (get_archive_entry_name(entry) == entryName && !is_archive_directory(entry)) {
-                success = read_current_archive_entry(reader, buffer);
-                break;
-            }
-            archive_read_data_skip(reader);
-        }
+    auto it = g_worker.imageEntryIndexMap.find(entryName);
+    if (it == g_worker.imageEntryIndexMap.end()) {
+        return false;
     }
 
-    archive_read_free(reader);
-    return success;
+    try {
+        bit7z::buffer_t extracted;
+        g_worker.archiveReader->extractTo(extracted, it->second);
+        if (extracted.empty()) {
+            return false;
+        }
+
+        const auto* begin = reinterpret_cast<const unsigned char*>(extracted.data());
+        buffer.assign(begin, begin + extracted.size());
+        return true;
+    }
+    catch (const bit7z::BitException& ex) {
+        dbgprintf("Extract archive entry failed: %s, reason: %s\n", entryName.c_str(), ex.what());
+        return false;
+    }
 }
 
 template <typename T>
@@ -410,7 +400,7 @@ bool decode_image_from_zip_entry(const std::wstring& zipPath, const std::string&
 	dbgprintf("Decoding image from archive: %s, entry: %s\n", zipPath.c_str(), entryName.c_str());
 
 	std::vector<unsigned char> buffer;
-	if (!read_image_entry_from_archive(zipPath, entryName, buffer) || buffer.empty()) {
+	if (!read_image_entry_from_archive(entryName, buffer) || buffer.empty()) {
 		g_worker.badImageEntries.insert(std::move(badKey));
 		return false;
 	}
@@ -675,7 +665,7 @@ bool open_zip_at(int index) {
 	if (!open_archive_for_zip(zipPath)) return false;
 
 	std::vector<std::string> entries;
-	if (!enumerate_image_entries_in_archive(zipPath, entries)) {
+	if (!enumerate_image_entries_in_archive(entries)) {
 		return false;
 	}
 
