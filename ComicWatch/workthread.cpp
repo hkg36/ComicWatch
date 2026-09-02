@@ -245,9 +245,7 @@ bool read_image_entry_from_archive(const std::string& entryName, std::vector<uns
         if (extracted.empty()) {
             return false;
         }
-
-        const auto* begin = reinterpret_cast<const unsigned char*>(extracted.data());
-        buffer.assign(begin, begin + extracted.size());
+		buffer = std::move(extracted);
         return true;
     }
     catch (const bit7z::BitException& ex) {
