@@ -526,7 +526,7 @@ void paint_image(HWND hWnd, HDC hdc) {
         
         auto zipFileName = std::wstring();
 		if (!g_state.currentZipPath.empty())
-            zipFileName = std::filesystem::path(g_state.currentZipPath).filename().wstring();
+            zipFileName = std::filesystem::path(g_state.currentZipPath).filename().wstring()+L"("+std::to_wstring(g_state.fileIndex)+L"/"+std::to_wstring(g_state.fileCount)+L")";
         std::wstring pageInfo = zipFileName;
 
         if (!pageInfo.empty()) {
