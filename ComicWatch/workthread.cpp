@@ -11,8 +11,10 @@
 #include <memory>
 #include <cstdint>
 #include <shellapi.h>
+#include <windows.h>
 #include <cwctype>
 
+#define BIT7Z_AUTO_FORMAT
 #include <bit7z/bit7z.hpp>
 #include <bit7z/bitarchivereader.hpp>
 
@@ -71,17 +73,32 @@ enum FileMode{
 FileMode mode = FileMode_None;
 
 const bit7z::Bit7zLibrary& get_bit7z_library() {
-	static const bit7z::Bit7zLibrary library(bit7z::kDefaultLibrary);
-	return library;
+    // Allocate on heap to avoid static destruction order issues when
+    // g_worker.archiveReader (a global) is destroyed after the library.
+    static const bit7z::Bit7zLibrary* library = new bit7z::Bit7zLibrary(bit7z::kDefaultLibrary);
+    return *library;
+}
+
+static std::string format_windows_error(DWORD err = ::GetLastError()) {
+    if (err == 0) return std::string();
+    LPSTR messageBuffer = nullptr;
+    DWORD size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
+    std::string message;
+    if (size && messageBuffer) {
+        message.assign(messageBuffer, size);
+        LocalFree(messageBuffer);
+    }
+    return message;
 }
 
 const bit7z::BitInFormat& get_archive_format(const std::wstring& archivePath) {
-	std::wstring ext = fs::path(archivePath).extension().wstring();
-	std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
-	if (ext == L".rar") {
-		return bit7z::BitFormat::Rar;
-	}
-	return bit7z::BitFormat::Zip;
+    std::wstring ext = fs::path(archivePath).extension().wstring();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+    if (ext == L".rar") {
+        return bit7z::BitFormat::Rar;
+    }
+    return bit7z::BitFormat::Zip;
 }
 
 std::string archive_item_path_utf8(const bit7z::BitArchiveItem& item) {
@@ -117,15 +134,23 @@ bool open_archive_for_zip(const std::wstring& zipPath) {
 
 	close_open_archive();
 	try {
-		const auto& library = get_bit7z_library();
-		const auto& format = get_archive_format(zipPath);
-		g_worker.archiveReader = std::make_unique<bit7z::BitArchiveReader>(library, bit7z::to_tstring(zipPath), format);
-	}
-	catch (const bit7z::BitException& ex) {
-		dbgprintf("Open archive failed: %ls, reason: %s\n", zipPath.c_str(), ex.what());
-		g_worker.archiveReader.reset();
-		return false;
-	}
+        const auto& library = get_bit7z_library();
+        const auto& format = bit7z::BitFormat::Auto;//get_archive_format(zipPath);
+        g_worker.archiveReader = std::make_unique<bit7z::BitArchiveReader>(library, bit7z::to_tstring(zipPath), format);
+    }
+    catch (const bit7z::BitException& ex) {
+        const char* what = ex.what();
+        if (what && what[0]) {
+            dbgprintf("Open archive failed: %ls, reason: %s\n", zipPath.c_str(), what);
+        }
+        else {
+            DWORD err = ::GetLastError();
+            std::string sys = format_windows_error(err);
+            dbgprintf("Open archive failed: %ls, reason: (empty) GetLastError=%u, msg=%s\n", zipPath.c_str(), err, sys.c_str());
+        }
+        g_worker.archiveReader.reset();
+        return false;
+    }
 
 	g_worker.archiveOpened = true;
 	g_worker.archiveZipPath = zipPath;
@@ -220,7 +245,15 @@ bool enumerate_image_entries_in_archive(std::vector<std::string>& entries) {
         return true;
     }
     catch (const bit7z::BitException& ex) {
-        dbgprintf("Enumerate archive entries failed: %ls, reason: %s\n", g_worker.archiveZipPath.c_str(), ex.what());
+        const char* what = ex.what();
+        if (what && what[0]) {
+            dbgprintf("Enumerate archive entries failed: %ls, reason: %s\n", g_worker.archiveZipPath.c_str(), what);
+        }
+        else {
+            DWORD err = ::GetLastError();
+            std::string sys = format_windows_error(err);
+            dbgprintf("Enumerate archive entries failed: %ls, reason: (empty) GetLastError=%u, msg=%s\n", g_worker.archiveZipPath.c_str(), err, sys.c_str());
+        }
         entries.clear();
         g_worker.imageEntryIndexMap.clear();
         return false;
@@ -249,7 +282,15 @@ bool read_image_entry_from_archive(const std::string& entryName, std::vector<uns
         return true;
     }
     catch (const bit7z::BitException& ex) {
-        dbgprintf("Extract archive entry failed: %s, reason: %s\n", entryName.c_str(), ex.what());
+        const char* what = ex.what();
+        if (what && what[0]) {
+            dbgprintf("Extract archive entry failed: %s, reason: %s\n", entryName.c_str(), what);
+        }
+        else {
+            DWORD err = ::GetLastError();
+            std::string sys = format_windows_error(err);
+            dbgprintf("Extract archive entry failed: %s, reason: (empty) GetLastError=%u, msg=%s\n", entryName.c_str(), err, sys.c_str());
+        }
         return false;
     }
 }
