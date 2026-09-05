@@ -3,23 +3,81 @@
 #include "../ComicWatch/MessageThread.h"
 #include <iostream>
 #define OPENSSL_SUPPRESS_DEPRECATED
-#define CPPHTTPLIB_OPENSSL_SUPPORT
-#define CPPHTTPLIB_ZLIB_SUPPORT
-#include <httplib.h>
+#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <mmsystem.h>
 #include <fkYAML/node.hpp>
 
+struct HttpResponse {
+    long status = 0;
+    std::string body;
+    bool ok() const { return status >= 200 && status < 300; }
+};
+
+static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
+{
+    size_t total = size * nmemb;
+    std::string* str = static_cast<std::string*>(userp);
+    str->append(static_cast<char*>(contents), total);
+    return total;
+}
+
+static HttpResponse http_post_binary(const std::string& origin, const std::string& path,
+    const void* data, size_t data_len,
+    const std::vector<std::pair<std::string, std::string>>& headers = {},
+    long timeout_seconds = 60)
+{
+    HttpResponse resp;
+    CURL* curl = curl_easy_init();
+    if (!curl) return resp;
+
+    std::string url = origin + path;
+    std::string response;
+
+    struct curl_slist* slist = nullptr;
+    for (const auto& h : headers) {
+        std::string s = h.first + ": " + h.second;
+        slist = curl_slist_append(slist, s.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)data_len);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+    if (slist) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, slist);
+
+    CURLcode rc = curl_easy_perform(curl);
+    if (rc == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &resp.status);
+        resp.body = std::move(response);
+    }
+
+    if (slist) curl_slist_free_all(slist);
+    curl_easy_cleanup(curl);
+    return resp;
+}
+
+static HttpResponse http_post_string(const std::string& origin, const std::string& path,
+    const std::string& body,
+    const std::vector<std::pair<std::string, std::string>>& headers = {},
+    long timeout_seconds = 60)
+{
+    return http_post_binary(origin, path, body.data(), body.size(), headers, timeout_seconds);
+}
+
 class AliTransClient {
 private:
     std::string api_key;
-    httplib::Client cli{"https://dashscope.aliyuncs.com"};
+    const std::string origin = "https://dashscope.aliyuncs.com";
     const std::string url = "/compatible-mode/v1";
 public:
     AliTransClient() {
-        cli.set_connection_timeout(5);        // 连接超时
-        cli.set_read_timeout(10);             // 读超时（最常用）
-        cli.set_write_timeout(5);            // 写超时
+        (void)origin;
     }
 
     void set_api_key(const std::string& key) {
@@ -36,9 +94,6 @@ public:
             throw std::runtime_error("API key not set");
         }
 
-        cli.set_read_timeout(60, 0);   // 60秒超时
-        cli.set_write_timeout(60, 0);
-
         nlohmann::json body = {
             {"model", model},
             {"messages", messages}
@@ -51,22 +106,22 @@ public:
             }
         }
 
-        httplib::Headers headers = {
+        std::vector<std::pair<std::string, std::string>> headers = {
             {"Authorization", "Bearer " + api_key},
             {"Content-Type", "application/json"}
         };
 
-        auto res = cli.Post(url + "/chat/completions", headers, body.dump(), "application/json");
+        auto res = http_post_string(origin, url + "/chat/completions", body.dump(), headers, 60);
 
-        if (!res || res->status != 200) {
+        if (!res.ok()) {
             std::string err = "HTTP error: ";
-            if (res) err += std::to_string(res->status) + " " + res->body;
+            if (res.status) err += std::to_string(res.status) + " " + res.body;
             else err += "No response";
             std::cout << err << std::endl;
             throw std::runtime_error(err);
         }
 
-        nlohmann::json response = nlohmann::json::parse(res->body);
+        nlohmann::json response = nlohmann::json::parse(res.body);
 
         // 提取 content
         if (response.contains("choices") &&
@@ -131,8 +186,6 @@ std::string voicevox_server_url;
 int voicevox_speaker_id=20;
 float voicevox_speed_scale = 1.0f;
 
-httplib::Client ocr_client("");
-httplib::Client voicevox_client("");
 AliTransClient ali_client;
 bool load_backprocess_config() {
     try {
@@ -172,8 +225,6 @@ bool load_backprocess_config() {
 			voicevox_speed_scale = spdscale.get_value<float>();
 		}
 
-        ocr_client = httplib::Client(ocr_origin);
-        voicevox_client = httplib::Client(voicevox_server_url);
         ali_client.set_api_key(ali_key);
         return true;
 	}
@@ -236,15 +287,16 @@ std::wstring _ocr_image(const cv::Mat image) {
 		dbgprintf("Failed to encode image to PNG format.\n");
 		return L"";
 	}
-	auto res = ocr_client.Post(ocr_path, (char*)webp_buffer.data(), webp_buffer.size(), "image/png");
-	if (res) {
-		dbgprintf("OCR request completed with status: %d body %s\n", res->status, res->body.c_str());
-		auto json = nlohmann::json::parse(res->body);
-		return utf8_to_wstring(json["result"].get<std::string>());
-	}
-	else {
+    std::vector<std::pair<std::string, std::string>> headers = {{"Content-Type", "image/png"}};
+    auto res = http_post_binary(ocr_origin, ocr_path, webp_buffer.data(), webp_buffer.size(), headers, 60);
+    if (res.ok()) {
+        dbgprintf("OCR request completed with status: %ld body len %zu\n", res.status, res.body.size());
+        auto json = nlohmann::json::parse(res.body);
+        return utf8_to_wstring(json["result"].get<std::string>());
+    }
+    else {
         return L"";
-	}
+    }
 }
 void ocr_image(const HWND backWnd,const cv::Mat image) {
 	workthread.post([backWnd, image] {
@@ -263,12 +315,9 @@ std::string voicevox_sound_buffer;
 void _play_sound(const std::wstring& text) {
     std::string path = "/audio_query?text=" + url_encode(wstring_to_utf8(text)) +
         "&speaker=" + std::to_string(voicevox_speaker_id);
-    auto res = voicevox_client.Post(path);
-    if (res) {
-        //res->status;
-        //res->body;
-        if (res->status == 200) {
-            auto json = nlohmann::json::parse(res->body);
+    auto res = http_post_string(voicevox_server_url, path, "", {}, 30);
+    if (res.ok() && res.status == 200) {
+        auto json = nlohmann::json::parse(res.body);
             //dbgprintf("Status: %d bodylen: %zu\n", res->status, res->body.size());
             //dbgprintf("Body: %s\n", res->body.c_str());
             // 固定语速，避免引擎侧预设导致播放听感异常偏快。
@@ -277,14 +326,13 @@ void _play_sound(const std::wstring& text) {
             auto sendbody = json.dump();
 
             std::string path2 = "/synthesis?speaker=" + std::to_string(voicevox_speaker_id);
-            auto res2 = voicevox_client.Post(path2, sendbody.c_str(), sendbody.size(), "application/json");
-            if (res2) {
-                dbgprintf("Status: %d bodylen: %zu\n", res2->status, res2->body.size());
-                //dbgprintf("Body: %s\n", res2->body.c_str());
-                voicevox_sound_buffer = std::move(res2->body);
+            std::vector<std::pair<std::string, std::string>> headers = {{"Content-Type", "application/json"}};
+            auto res2 = http_post_string(voicevox_server_url, path2, sendbody, headers, 60);
+            if (res2.ok()) {
+                dbgprintf("Status: %ld bodylen: %zu\n", res2.status, res2.body.size());
+                voicevox_sound_buffer = std::move(res2.body);
                 PlaySoundA(voicevox_sound_buffer.c_str(), NULL, SND_MEMORY | SND_ASYNC);
             }
-        }
     }
 }
 void play_sound(std::wstring text) {

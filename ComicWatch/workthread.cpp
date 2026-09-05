@@ -75,7 +75,7 @@ FileMode mode = FileMode_None;
 const bit7z::Bit7zLibrary& get_bit7z_library() {
     // Allocate on heap to avoid static destruction order issues when
     // g_worker.archiveReader (a global) is destroyed after the library.
-    static const bit7z::Bit7zLibrary* library = new bit7z::Bit7zLibrary(bit7z::kDefaultLibrary);
+    static const bit7z::Bit7zLibrary* library = new bit7z::Bit7zLibrary(BIT7Z_STRING("7zip.dll"));
     return *library;
 }
 

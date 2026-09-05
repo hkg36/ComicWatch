@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <windowsx.h>
 #include <algorithm>
+#include <curl/curl.h>
 #include "ScreenShot.h"
 #include "BackProcess.h"
 #include "../ComicWatch/MessageThread.h"
@@ -22,6 +23,11 @@
 #pragma comment(lib, "opencv_imgcodecs4.lib")
 #pragma comment(lib, "opencv_imgproc4.lib")
 #pragma comment(lib,"z.lib")
+#endif
+#ifdef _DEBUG
+#pragma comment(lib, "libcurl-d.lib")
+#else
+#pragma comment(lib, "libcurl.lib")
 #endif
 #pragma comment(lib,"libcrypto.lib")
 #pragma comment(lib,"libssl.lib")
@@ -72,6 +78,7 @@ bool SingleInstance()
 	}
 	return true;
 }
+
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
                      _In_ LPWSTR    lpCmdLine,
