@@ -10,7 +10,13 @@
 #define IDC_COMICOCR                    109
 #define IDR_MAINFRAME                   128
 #define IDM_TRAY_TOGGLE                 32771
-#define IDM_TRAY_EXIT                   32772
+#define IDM_TRAY_SETTINGS               32772
+#define IDM_TRAY_EXIT                   32773
+#define IDC_EDIT_ALI_KEY                1000
+#define IDC_EDIT_OCR_URL                1001
+#define IDC_EDIT_VOICEVOX_URL           1002
+#define IDC_EDIT_SPEAKER_ID             1003
+#define IDC_EDIT_SPEED_SCALE            1004
 #define IDC_STATIC                      -1
 
 // Next default values for new objects
@@ -19,7 +25,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        129
-#define _APS_NEXT_COMMAND_VALUE         32771
+#define _APS_NEXT_COMMAND_VALUE         32774
 #define _APS_NEXT_CONTROL_VALUE         1000
 #define _APS_NEXT_SYMED_VALUE           110
 #endif

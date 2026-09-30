@@ -140,27 +140,42 @@ public:
 MessageThread workthread;
 namespace fs = std::filesystem;
 std::wstring get_yaml_path() {
-    WCHAR exePath[MAX_PATH]{};
-    DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-    if (len == 0 || len >= MAX_PATH) return L"ComicWatch.yaml";
-    fs::path iniPath(exePath);
-    iniPath.replace_extension(L".yaml");
-    return iniPath.wstring();
+	WCHAR exePath[MAX_PATH]{};
+	DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+	if (len == 0 || len >= MAX_PATH) return L"ComicOcr.yaml";
+	fs::path iniPath(exePath);
+	iniPath.replace_extension(L".yaml");
+	return iniPath.wstring();
 }
 std::string wstring_to_utf8(const std::wstring& wstr)
 {
-    if (wstr.empty()) return {};
+	if (wstr.empty()) return {};
 
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
-        static_cast<int>(wstr.size()),
-        nullptr, 0, nullptr, nullptr);
-    if (size_needed <= 0) return {};
+	int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+		static_cast<int>(wstr.size()),
+		nullptr, 0, nullptr, nullptr);
+	if (size_needed <= 0) return {};
 
-    std::string utf8(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
-        static_cast<int>(wstr.size()),
-        &utf8[0], size_needed, nullptr, nullptr);
-    return utf8;
+	std::string utf8(size_needed, 0);
+	WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+		static_cast<int>(wstr.size()),
+		&utf8[0], size_needed, nullptr, nullptr);
+	return utf8;
+}
+std::wstring utf8_to_wstring(const std::string& s) {
+	if (s.empty()) return std::wstring();
+	int size_needed = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+	if (size_needed <= 0) {
+		size_needed = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
+		if (size_needed <= 0) return std::wstring();
+		std::wstring out(size_needed, 0);
+		MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), &out[0], size_needed);
+		return out;
+	}
+
+	std::wstring out(size_needed, 0);
+	MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], size_needed);
+	return out;
 }
 bool SplitUrlToOriginAndPath(const std::string& url, std::string& origin, std::string& path) {
 	size_t scheme_end = url.find("://");
@@ -170,23 +185,94 @@ bool SplitUrlToOriginAndPath(const std::string& url, std::string& origin, std::s
 	size_t host_start = scheme_end + 3;
 	size_t path_start = url.find('/', host_start);
 	if (path_start == std::string::npos) {
-        origin = url;
+		origin = url;
 		path = "/";
 	}
 	else {
-        origin = url.substr(0, path_start);
+		origin = url.substr(0, path_start);
 		path = url.substr(path_start);
 	}
 	return true;
 }
+static std::string yaml_single_quote(const std::string& value)
+{
+	std::string result = "'";
+	for (char ch : value)
+	{
+		if (ch == '\'')
+		{
+			result += "''";
+		}
+		else
+		{
+			result += ch;
+		}
+	}
+	result += "'";
+	return result;
+}
 std::string ali_key;
+std::string ocr_server_url;
 std::string ocr_origin;
 std::string ocr_path;
 std::string voicevox_server_url;
-int voicevox_speaker_id=20;
+int voicevox_speaker_id = 20;
 float voicevox_speed_scale = 1.0f;
 
 AliTransClient ali_client;
+
+BackProcessConfig get_backprocess_config()
+{
+	BackProcessConfig config;
+	config.ali_key = utf8_to_wstring(ali_key);
+	config.ocr_server_url = utf8_to_wstring(ocr_server_url);
+	config.voicevox_server_url = utf8_to_wstring(voicevox_server_url);
+	config.voicevox_speaker_id = voicevox_speaker_id;
+	config.voicevox_speed_scale = voicevox_speed_scale;
+	return config;
+}
+
+bool save_backprocess_config(const BackProcessConfig& config)
+{
+	const std::string aliKey = wstring_to_utf8(config.ali_key);
+	const std::string ocrUrl = wstring_to_utf8(config.ocr_server_url);
+	const std::string voicevoxUrl = wstring_to_utf8(config.voicevox_server_url);
+
+	if (ocrUrl.empty() || !SplitUrlToOriginAndPath(ocrUrl, ocr_origin, ocr_path))
+	{
+		return false;
+	}
+
+	auto yamlPath = get_yaml_path();
+	fs::path path(yamlPath);
+	std::ofstream file(path, std::ios::binary | std::ios::trunc);
+	if (!file.is_open()) {
+		dbgprintf(L"无法写入配置文件！路径: %s\n", yamlPath.c_str());
+		return false;
+	}
+
+	file << "key:\n";
+	file << "  ali_key: " << yaml_single_quote(aliKey) << "\n";
+	file << "ocr:\n";
+	file << "  server_url: " << yaml_single_quote(ocrUrl) << "\n";
+	file << "voicevox:\n";
+	file << "  src: " << yaml_single_quote(voicevoxUrl) << "\n";
+	file << "  speaker_id: " << config.voicevox_speaker_id << "\n";
+	file << "  speed_scale: " << config.voicevox_speed_scale << "\n";
+
+	if (!file.good())
+	{
+		return false;
+	}
+
+	ali_key = aliKey;
+	ocr_server_url = ocrUrl;
+	voicevox_server_url = voicevoxUrl;
+	voicevox_speaker_id = config.voicevox_speaker_id;
+	voicevox_speed_scale = config.voicevox_speed_scale;
+	ali_client.set_api_key(ali_key);
+	return true;
+}
 bool load_backprocess_config() {
     try {
         auto yamlPath = get_yaml_path();
@@ -206,7 +292,7 @@ bool load_backprocess_config() {
         auto& keyNode = node["key"];
         ali_key = keyNode["ali_key"].get_value<std::string>();
         auto& ocrNode = node["ocr"];
-        auto ocr_server_url = ocrNode["server_url"].get_value<std::string>();
+        ocr_server_url = ocrNode["server_url"].get_value<std::string>();
         SplitUrlToOriginAndPath(ocr_server_url, ocr_origin, ocr_path);
         auto& voicevoxNode = node["voicevox"];
         voicevox_server_url = voicevoxNode["src"].get_value<std::string>();
@@ -233,21 +319,6 @@ bool load_backprocess_config() {
         MessageBoxA(nullptr, msg.c_str(), "error", MB_OK | MB_ICONINFORMATION);
         return false;
     }
-}
-std::wstring utf8_to_wstring(const std::string& s) {
-    if (s.empty()) return std::wstring();
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
-    if (size_needed <= 0) {
-        size_needed = MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), nullptr, 0);
-        if (size_needed <= 0) return std::wstring();
-        std::wstring out(size_needed, 0);
-        MultiByteToWideChar(CP_ACP, 0, s.c_str(), (int)s.size(), &out[0], size_needed);
-        return out;
-    }
-
-    std::wstring out(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], size_needed);
-    return out;
 }
 std::string url_encode(const std::string& s)
 {

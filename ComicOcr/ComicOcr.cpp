@@ -60,6 +60,8 @@ BOOL AddTrayIcon(HWND hWnd);
 void RemoveTrayIcon();
 void ToggleMainWindow();
 void ShowTrayMenu(HWND hWnd);
+void ShowConfigDialog(HWND hWnd);
+INT_PTR CALLBACK ConfigDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam);
 void Paint(HWND hWnd, HDC hdc);
 RECT GetNormalizedDragRect();
 cv::Mat GetDragRectMat();
@@ -206,6 +208,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
             case IDM_TRAY_TOGGLE:
                 ToggleMainWindow();
+                break;
+            case IDM_TRAY_SETTINGS:
+                ShowConfigDialog(hWnd);
                 break;
             case IDM_TRAY_EXIT:
                 DestroyWindow(hWnd);
@@ -445,6 +450,7 @@ void ShowTrayMenu(HWND hWnd)
     }
 
     AppendMenu(hMenu, MF_STRING, IDM_TRAY_TOGGLE, g_isWindowVisible ? L"隐藏窗口" : L"显示窗口");
+    AppendMenu(hMenu, MF_STRING, IDM_TRAY_SETTINGS, L"配置...");
     AppendMenu(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenu(hMenu, MF_STRING, IDM_TRAY_EXIT, L"退出");
 
@@ -455,6 +461,99 @@ void ShowTrayMenu(HWND hWnd)
     PostMessage(hWnd, WM_NULL, 0, 0);//TrackPopupMenu 是模态的，它会阻塞直到菜单消失。但有时菜单消失后，窗口的激活状态或消息队列会有点“卡住”。发一个 WM_NULL（空消息）可以让消息循环继续运转
 
     DestroyMenu(hMenu);
+}
+
+static std::wstring GetDlgItemTextString(HWND hDlg, int itemId)
+{
+    wchar_t buffer[2048]{};
+    GetDlgItemTextW(hDlg, itemId, buffer, ARRAYSIZE(buffer));
+    return buffer;
+}
+
+static bool ParseIntText(const std::wstring& text, int& value)
+{
+    wchar_t* end = nullptr;
+    long parsed = wcstol(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != L'\0')
+    {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+static bool ParseFloatText(const std::wstring& text, float& value)
+{
+    wchar_t* end = nullptr;
+    float parsed = wcstof(text.c_str(), &end);
+    if (end == text.c_str() || *end != L'\0')
+    {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+INT_PTR CALLBACK ConfigDialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    UNREFERENCED_PARAMETER(lParam);
+    switch (message)
+    {
+    case WM_INITDIALOG:
+    {
+        const auto config = get_backprocess_config();
+        SetDlgItemTextW(hDlg, IDC_EDIT_ALI_KEY, config.ali_key.c_str());
+        SetDlgItemTextW(hDlg, IDC_EDIT_OCR_URL, config.ocr_server_url.c_str());
+        SetDlgItemTextW(hDlg, IDC_EDIT_VOICEVOX_URL, config.voicevox_server_url.c_str());
+        SetDlgItemInt(hDlg, IDC_EDIT_SPEAKER_ID, static_cast<UINT>(config.voicevox_speaker_id), TRUE);
+        SetDlgItemTextW(hDlg, IDC_EDIT_SPEED_SCALE, std::to_wstring(config.voicevox_speed_scale).c_str());
+        return TRUE;
+    }
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDOK:
+        {
+            BackProcessConfig config;
+            config.ali_key = GetDlgItemTextString(hDlg, IDC_EDIT_ALI_KEY);
+            config.ocr_server_url = GetDlgItemTextString(hDlg, IDC_EDIT_OCR_URL);
+            config.voicevox_server_url = GetDlgItemTextString(hDlg, IDC_EDIT_VOICEVOX_URL);
+            const std::wstring speakerText = GetDlgItemTextString(hDlg, IDC_EDIT_SPEAKER_ID);
+            const std::wstring speedText = GetDlgItemTextString(hDlg, IDC_EDIT_SPEED_SCALE);
+
+            if (config.ali_key.empty() || config.ocr_server_url.empty() || config.voicevox_server_url.empty())
+            {
+                MessageBoxW(hDlg, L"配置不能为空。", L"ComicOcr", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+
+            if (!ParseIntText(speakerText, config.voicevox_speaker_id) || !ParseFloatText(speedText, config.voicevox_speed_scale))
+            {
+                MessageBoxW(hDlg, L"speaker_id 或 speed_scale 格式不正确。", L"ComicOcr", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+
+            if (!save_backprocess_config(config))
+            {
+                MessageBoxW(hDlg, L"保存配置失败，请检查输入。", L"ComicOcr", MB_OK | MB_ICONERROR);
+                return TRUE;
+            }
+
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL:
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+void ShowConfigDialog(HWND hWnd)
+{
+    DialogBoxParamW(hInst, MAKEINTRESOURCE(IDD_COMICOCR_DIALOG), hWnd, ConfigDialogProc, 0);
 }
 
 RECT GetNormalizedDragRect()
