@@ -325,9 +325,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_USER_OCRFINISH:
 		{
-		std::unique_ptr<std::wstring> msg(
-			reinterpret_cast<std::wstring*>(lParam));
-		ocr_result = std::move(*msg);
+		if (!try_take_ocr_result(ocr_result)) {
+			break;
+		}
 		auto cache_result = check_translation_cache(ocr_result);
 		if (!cache_result.empty()) {
 			trans_result = cache_result;
@@ -346,9 +346,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_USER_TRANSFINISH: 
 		{
-		std::unique_ptr<std::wstring> msg(
-			reinterpret_cast<std::wstring*>(lParam));
-		trans_result = std::move(*msg);
+		if (!try_take_translation_result(trans_result)) {
+			break;
+		}
 		InvalidateRect(hWnd, nullptr, FALSE);
 		}
 		break;

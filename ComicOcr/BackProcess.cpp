@@ -2,6 +2,7 @@
 #include "BackProcess.h"
 #include "../ComicWatch/MessageThread.h"
 #include <iostream>
+#include <mutex>
 #define OPENSSL_SUPPRESS_DEPRECATED
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -138,6 +139,10 @@ public:
 };
 
 MessageThread workthread;
+std::mutex g_ocr_result_mutex;
+std::deque<std::wstring> g_ocr_result_queue;
+std::mutex g_trans_result_mutex;
+std::deque<std::wstring> g_trans_result_queue;
 namespace fs = std::filesystem;
 std::wstring get_yaml_path() {
 	WCHAR exePath[MAX_PATH]{};
@@ -376,11 +381,17 @@ void ocr_image(const HWND backWnd,const cv::Mat image) {
 			dbgprintf("OCR failed or returned empty result.\n");
 			return;
 		}
-        auto msg = std::make_unique<std::wstring>(ocr_result);
-        if (PostMessage(backWnd, WM_USER_OCRFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
-			msg.release();
-        }
-        });
+		{
+			std::lock_guard<std::mutex> lock(g_ocr_result_mutex);
+			g_ocr_result_queue.emplace_back(std::move(ocr_result));
+		}
+		if (!PostMessage(backWnd, WM_USER_OCRFINISH, 0, 0)) {
+			std::lock_guard<std::mutex> lock(g_ocr_result_mutex);
+			if (!g_ocr_result_queue.empty()) {
+				g_ocr_result_queue.pop_back();
+			}
+		}
+		});
 }
 std::string voicevox_sound_buffer;
 void _play_sound(const std::wstring& text) {
@@ -509,11 +520,35 @@ void start_translation(HWND hWnd,std::wstring text) {
 		std::wstring w_translated = utf8_to_wstring(translated);
 		translation_cache.put(text, w_translated);
 		dbgprintf(L"Src: %s\nTranslation result: %s\n", text.c_str(), w_translated.c_str());
-		auto msg = std::make_unique<std::wstring>(std::move(w_translated));
-		if (PostMessage(hWnd, WM_USER_TRANSFINISH, 0, reinterpret_cast<LPARAM>(msg.get()))) {
-			msg.release();
+		{
+			std::lock_guard<std::mutex> lock(g_trans_result_mutex);
+			g_trans_result_queue.emplace_back(std::move(w_translated));
+		}
+		if (!PostMessage(hWnd, WM_USER_TRANSFINISH, 0, 0)) {
+			std::lock_guard<std::mutex> lock(g_trans_result_mutex);
+			if (!g_trans_result_queue.empty()) {
+				g_trans_result_queue.pop_back();
+			}
 		}
 		});
+}
+bool try_take_ocr_result(std::wstring& out) {
+	std::lock_guard<std::mutex> lock(g_ocr_result_mutex);
+	if (g_ocr_result_queue.empty()) {
+		return false;
+	}
+	out = std::move(g_ocr_result_queue.front());
+	g_ocr_result_queue.pop_front();
+	return true;
+}
+bool try_take_translation_result(std::wstring& out) {
+	std::lock_guard<std::mutex> lock(g_trans_result_mutex);
+	if (g_trans_result_queue.empty()) {
+		return false;
+	}
+	out = std::move(g_trans_result_queue.front());
+	g_trans_result_queue.pop_front();
+	return true;
 }
 std::wstring check_translation_cache(std::wstring text) {
 	return workthread.send([text = std::move(text)] -> std::wstring {

@@ -17,4 +17,6 @@ BackProcessConfig get_backprocess_config();
 bool save_backprocess_config(const BackProcessConfig& config);
 void start_translation(HWND hWnd, std::wstring text);
 std::wstring check_translation_cache(std::wstring text);
+bool try_take_ocr_result(std::wstring& out);
+bool try_take_translation_result(std::wstring& out);
 void back_ocr_and_play(const cv::Mat image);
