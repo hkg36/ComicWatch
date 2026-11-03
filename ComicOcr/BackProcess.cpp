@@ -442,7 +442,8 @@ void back_ocr_and_play(const cv::Mat image) {
 std::string translate_with_ali(
     const std::string& text = "Hello, world!",
     const std::string& source_lang = "Japanese",
-    const std::string& target_lang = "Chinese"
+    const std::string& target_lang = "Chinese",
+	const std::string & model = "qwen-mt-flash"
 ) {
     nlohmann::json messages = nlohmann::json::array({
         {{"role", "user"}, {"content", text}}
@@ -458,7 +459,7 @@ std::string translate_with_ali(
     };
 
     std::string translated_text = ali_client.chat_completions_create(
-        "qwen-mt-flash",      // 或你想用的模型
+        model,      // 或你想用的模型
         messages,
         extra_body
     );
