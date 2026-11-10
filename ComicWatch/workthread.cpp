@@ -64,6 +64,8 @@ struct FileWorkerState {
 	std::set<std::wstring> badImageEntries;
 	std::map<int, cv::Mat> preloadCache;
 	bool folderOpened = false;
+	bool openedFrom7zTemp = false;
+	std::wstring source7zPath;
 } g_fileWorker;
 enum FileMode{
 	FileMode_None,
@@ -211,8 +213,14 @@ bool is_supported_image_file(const std::wstring& name) {
     return false;
 }
 
+bool is_7z_archive_file(const std::wstring& name) {
+    auto dot = name.find_last_of(L'.');
+    if (dot == std::wstring::npos) return false;
+    return string_lower(name.substr(dot)) == L".7z";
+}
+
 bool is_supported_archive_file(const std::wstring& name) {
-    static const wchar_t* support_ext[] = { L".zip", L".rar" };
+    static const wchar_t* support_ext[] = { L".zip", L".rar", L".7z" };
     auto dot = name.find_last_of(L'.');
     if (dot == std::wstring::npos) return false;
     std::wstring ext = string_lower(name.substr(dot));
@@ -261,38 +269,140 @@ bool enumerate_image_entries_in_archive(std::vector<std::string>& entries) {
 }
 
 bool read_image_entry_from_archive(const std::string& entryName, std::vector<unsigned char>& buffer) {
-    buffer.clear();
+	buffer.clear();
 
-    if (!g_worker.archiveOpened || !g_worker.archiveReader) {
-        return false;
-    }
+	if (!g_worker.archiveOpened || !g_worker.archiveReader) {
+		return false;
+	}
 
-    auto it = g_worker.imageEntryIndexMap.find(entryName);
-    if (it == g_worker.imageEntryIndexMap.end()) {
-        return false;
-    }
+	auto it = g_worker.imageEntryIndexMap.find(entryName);
+	if (it == g_worker.imageEntryIndexMap.end()) {
+		return false;
+	}
 
-    try {
-        bit7z::buffer_t extracted;
-        g_worker.archiveReader->extractTo(extracted, it->second);
-        if (extracted.empty()) {
-            return false;
-        }
+	try {
+		bit7z::buffer_t extracted;
+		g_worker.archiveReader->extractTo(extracted, it->second);
+		if (extracted.empty()) {
+			return false;
+		}
 		buffer = std::move(extracted);
-        return true;
-    }
-    catch (const bit7z::BitException& ex) {
-        const char* what = ex.what();
-        if (what && what[0]) {
-            dbgprintf("Extract archive entry failed: %s, reason: %s\n", entryName.c_str(), what);
-        }
-        else {
-            DWORD err = ::GetLastError();
-            std::string sys = format_windows_error(err);
-            dbgprintf("Extract archive entry failed: %s, reason: (empty) GetLastError=%u, msg=%s\n", entryName.c_str(), err, sys.c_str());
-        }
-        return false;
-    }
+		return true;
+	}
+	catch (const bit7z::BitException& ex) {
+		const char* what = ex.what();
+		if (what && what[0]) {
+			dbgprintf("Extract archive entry failed: %s, reason: %s\n", entryName.c_str(), what);
+		}
+		else {
+			DWORD err = ::GetLastError();
+			std::string sys = format_windows_error(err);
+			dbgprintf("Extract archive entry failed: %s, reason: (empty) GetLastError=%u, msg=%s\n", entryName.c_str(), err, sys.c_str());
+		}
+		return false;
+	}
+}
+
+bool extract_7z_images_to_temp_folder(const std::wstring& archivePath, std::wstring& outTempFolder, std::wstring* outStatus = nullptr) {
+	std::error_code ec;
+	fs::path tempRoot = fs::temp_directory_path(ec);
+	if (ec) {
+		if (outStatus) {
+			*outStatus = L"无法获取临时目录:\n" + utf8_to_wstring(ec.message());
+		}
+		return false;
+	}
+
+	outTempFolder = (tempRoot / fs::path(archivePath).filename()).wstring();
+	fs::path tempFolderPath(outTempFolder);
+	if (fs::exists(tempFolderPath, ec) && fs::is_directory(tempFolderPath, ec)) {
+		return true;
+	}
+
+	if (!fs::create_directories(tempFolderPath, ec) && ec) {
+		if (outStatus) {
+			*outStatus = L"创建临时目录失败:\n" + outTempFolder;
+		}
+		return false;
+	}
+
+	try {
+		const auto& library = get_bit7z_library();
+		bit7z::BitArchiveReader reader(library, bit7z::to_tstring(archivePath), bit7z::BitFormat::Auto);
+		int extractedImageCount = 0;
+
+		for (const auto& item : reader) {
+			if (item.isDir()) {
+				continue;
+			}
+
+			std::string entryName = archive_item_path_utf8(item);
+			if (!is_supported_image_file(entryName)) {
+				continue;
+			}
+
+			fs::path relativePath = fs::path(utf8_to_wstring(entryName)).lexically_normal();
+			if (relativePath.empty() || relativePath.is_absolute()) {
+				continue;
+			}
+
+			bool hasParentTraversal = false;
+			for (const auto& part : relativePath) {
+				if (part == L"..") {
+					hasParentTraversal = true;
+					break;
+				}
+			}
+			if (hasParentTraversal) {
+				continue;
+			}
+
+			fs::path outputPath = tempFolderPath / relativePath;
+			fs::create_directories(outputPath.parent_path(), ec);
+			if (ec) {
+				continue;
+			}
+
+			bit7z::buffer_t extracted;
+			reader.extractTo(extracted, static_cast<std::uint32_t>(item.index()));
+			if (extracted.empty()) {
+				continue;
+			}
+
+			std::ofstream output(outputPath, std::ios::binary);
+			if (!output.is_open()) {
+				continue;
+			}
+
+			output.write(reinterpret_cast<const char*>(extracted.data()), static_cast<std::streamsize>(extracted.size()));
+			if (output.good()) {
+				++extractedImageCount;
+			}
+		}
+
+		if (extractedImageCount == 0) {
+			if (outStatus) {
+				*outStatus = L"7z压缩包内无可读取图片:\n" + archivePath;
+			}
+			return false;
+		}
+		return true;
+	}
+	catch (const bit7z::BitException& ex) {
+		if (outStatus) {
+			*outStatus = L"解压7z失败:\n" + archivePath;
+		}
+		const char* what = ex.what();
+		if (what && what[0]) {
+			dbgprintf("Extract 7z failed: %ls, reason: %s\n", archivePath.c_str(), what);
+		}
+		else {
+			DWORD err = ::GetLastError();
+			std::string sys = format_windows_error(err);
+			dbgprintf("Extract 7z failed: %ls, reason: (empty) GetLastError=%u, msg=%s\n", archivePath.c_str(), err, sys.c_str());
+		}
+		return false;
+	}
 }
 
 template <typename T>
@@ -389,7 +499,8 @@ void scan_zip_files_in_folder(const std::wstring& folder) {
 	for (const auto& entry : fs::directory_iterator(folder, ec)) {
 		if (ec) break;
 		if (!entry.is_regular_file()) continue;
-		if (is_supported_archive_file(entry.path().filename().wstring())) {
+		const std::wstring fileName = entry.path().filename().wstring();
+		if (is_supported_archive_file(fileName) && !is_7z_archive_file(fileName)) {
 			g_worker.zipFiles.push_back(entry.path().wstring());
 		}
 	}
@@ -849,17 +960,31 @@ void delete_current_zip() {
 	}
 }
 void delete_current_folder() {
-    assert(mode == FileMode_Folder);
+	assert(mode == FileMode_Folder);
 	if(g_fileWorker.currentFolder.empty()) return;
-    std::wstring deletingPath = g_fileWorker.currentFolder;
-    close_open_archive();
-    if (!move_file_to_recycle_bin(deletingPath)) return;
-    fs::path selectedPath(deletingPath);
-    g_fileWorker.currentFolder = selectedPath.parent_path().wstring();
-    g_fileWorker.currentImage.release();
-    g_fileWorker.imageFiles.clear();
-    g_fileWorker.imageIndex = -1;
-    g_fileWorker.preloadCache.clear();
+
+	if (g_fileWorker.openedFrom7zTemp && !g_fileWorker.source7zPath.empty()) {
+		std::wstring deletingPath = g_fileWorker.source7zPath;
+		close_open_archive();
+		if (!move_file_to_recycle_bin(deletingPath)) return;
+		g_fileWorker.currentImage.release();
+		g_fileWorker.imageFiles.clear();
+		g_fileWorker.imageIndex = -1;
+		g_fileWorker.preloadCache.clear();
+		g_fileWorker.statusMessage = L"当前7z文件已删除:\n" + deletingPath;
+		dbgprintf(L"Deleted 7z file: %s\n", deletingPath.c_str());
+		return;
+	}
+
+	std::wstring deletingPath = g_fileWorker.currentFolder;
+	close_open_archive();
+	if (!move_file_to_recycle_bin(deletingPath)) return;
+	fs::path selectedPath(deletingPath);
+	g_fileWorker.currentFolder = selectedPath.parent_path().wstring();
+	g_fileWorker.currentImage.release();
+	g_fileWorker.imageFiles.clear();
+	g_fileWorker.imageIndex = -1;
+	g_fileWorker.preloadCache.clear();
 	g_fileWorker.statusMessage = L"当前文件夹已删除:\n" + deletingPath;
 	dbgprintf(L"Deleted folder: %s\n", deletingPath.c_str());
 }
@@ -867,55 +992,94 @@ void delete_current_folder() {
 void CheckPreloadCacheNeedClear();
 void PreloadNeighbors();
 std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
-    if (is_supported_archive_file(filePath)) {
-        return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
-            mode = FileMode_Zip;
-            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
-            fs::path selectedPath(filePath);
-            std::wstring folder = selectedPath.parent_path().wstring();
-            scan_zip_files_in_folder(folder);
-            auto it = std::find(g_worker.zipFiles.begin(), g_worker.zipFiles.end(), selectedPath.wstring());
-            if (it != g_worker.zipFiles.end()) {
-                int selectedIndex = (int)std::distance(g_worker.zipFiles.begin(), it);
-                result->success = open_zip_at(selectedIndex);
-                if (!result->success) {
-                    if (!open_zip_by_step(selectedIndex + 1, 1)) {
-                        result->success = open_zip_by_step(selectedIndex - 1, -1);
-                    }
-                    else {
-                        result->success = true;
-                    }
-                }
-            }
-            fill_snapshot(result->snapshot);
-            PreloadNeighbors();
-            return result;
-            });
-    }
-    else {
-        return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
-            mode = FileMode_Folder;
-            std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
-            fs::path selectedPath(filePath);
-            std::wstring folder = selectedPath.parent_path().wstring();
-            scan_images_in_folder(folder);
-            if (!g_fileWorker.imageFiles.empty()) {
-                g_fileWorker.imageIndex = 0;
-				auto it = std::find(g_fileWorker.imageFiles.begin(), g_fileWorker.imageFiles.end(), selectedPath.wstring());
-                if (it != g_fileWorker.imageFiles.end()) {
-                    g_fileWorker.imageIndex = (int)std::distance(g_fileWorker.imageFiles.begin(), it);
-                }
-                result->success = load_current_image_file();
-            }
-            else {
-                result->success = false;
-                g_fileWorker.statusMessage = L"当前文件夹内无图片文件:\n" + folder;
-            }
-            fill_snapshot(result->snapshot);
-            PreloadNeighbors();
-            return result;
+	if (is_supported_archive_file(filePath)) {
+		if (is_7z_archive_file(filePath)) {
+			return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
+				mode = FileMode_Folder;
+				std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+				std::wstring tempFolder;
+				std::wstring status;
+				if (!extract_7z_images_to_temp_folder(filePath, tempFolder, &status)) {
+					g_fileWorker.currentImage.release();
+					g_fileWorker.imageFiles.clear();
+					g_fileWorker.imageIndex = -1;
+					g_fileWorker.preloadCache.clear();
+					g_fileWorker.openedFrom7zTemp = true;
+					g_fileWorker.source7zPath = filePath;
+					g_fileWorker.currentFolder = tempFolder;
+					g_fileWorker.statusMessage = status;
+					result->success = false;
+					fill_snapshot(result->snapshot);
+					return result;
+				}
+
+				g_fileWorker.openedFrom7zTemp = true;
+				g_fileWorker.source7zPath = filePath;
+				scan_images_in_folder(tempFolder);
+				if (!g_fileWorker.imageFiles.empty()) {
+					g_fileWorker.imageIndex = 0;
+					result->success = load_current_image_file();
+				}
+				else {
+					result->success = false;
+					g_fileWorker.statusMessage = L"当前7z临时目录内无图片文件:\n" + tempFolder;
+				}
+				fill_snapshot(result->snapshot);
+				PreloadNeighbors();
+				return result;
+				});
+		}
+
+		return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
+			mode = FileMode_Zip;
+			std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+			fs::path selectedPath(filePath);
+			std::wstring folder = selectedPath.parent_path().wstring();
+			scan_zip_files_in_folder(folder);
+			auto it = std::find(g_worker.zipFiles.begin(), g_worker.zipFiles.end(), selectedPath.wstring());
+			if (it != g_worker.zipFiles.end()) {
+				int selectedIndex = (int)std::distance(g_worker.zipFiles.begin(), it);
+				result->success = open_zip_at(selectedIndex);
+				if (!result->success) {
+					if (!open_zip_by_step(selectedIndex + 1, 1)) {
+						result->success = open_zip_by_step(selectedIndex - 1, -1);
+					}
+					else {
+						result->success = true;
+					}
+				}
+			}
+			fill_snapshot(result->snapshot);
+			PreloadNeighbors();
+			return result;
 			});
-    }
+	}
+	else {
+		return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
+			mode = FileMode_Folder;
+			std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
+			fs::path selectedPath(filePath);
+			std::wstring folder = selectedPath.parent_path().wstring();
+			g_fileWorker.openedFrom7zTemp = false;
+			g_fileWorker.source7zPath.clear();
+			scan_images_in_folder(folder);
+			if (!g_fileWorker.imageFiles.empty()) {
+				g_fileWorker.imageIndex = 0;
+				auto it = std::find(g_fileWorker.imageFiles.begin(), g_fileWorker.imageFiles.end(), selectedPath.wstring());
+				if (it != g_fileWorker.imageFiles.end()) {
+					g_fileWorker.imageIndex = (int)std::distance(g_fileWorker.imageFiles.begin(), it);
+				}
+				result->success = load_current_image_file();
+			}
+			else {
+				result->success = false;
+				g_fileWorker.statusMessage = L"当前文件夹内无图片文件:\n" + folder;
+			}
+			fill_snapshot(result->snapshot);
+			PreloadNeighbors();
+			return result;
+			});
+	}
 }
 std::shared_ptr<WorkerResult> ShowNextImage() {
     if (mode == FileMode_Zip) {
