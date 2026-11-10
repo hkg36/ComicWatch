@@ -331,54 +331,31 @@ bool extract_7z_images_to_temp_folder(const std::wstring& archivePath, std::wstr
 		bit7z::BitArchiveReader reader(library, bit7z::to_tstring(archivePath), bit7z::BitFormat::Auto);
 		int extractedImageCount = 0;
 
-		for (const auto& item : reader) {
+		bit7z::FilterCallback filterCallback = [&](const bit7z::BitArchiveItem& item) -> bit7z::FilterResult {
 			if (item.isDir()) {
-				continue;
+				return bit7z::FilterResult::SkipItem;
 			}
 
 			std::string entryName = archive_item_path_utf8(item);
 			if (!is_supported_image_file(entryName)) {
-				continue;
+				return bit7z::FilterResult::SkipItem;
 			}
 
 			fs::path relativePath = fs::path(utf8_to_wstring(entryName)).lexically_normal();
 			if (relativePath.empty() || relativePath.is_absolute()) {
-				continue;
+				return bit7z::FilterResult::SkipItem;
 			}
 
-			bool hasParentTraversal = false;
 			for (const auto& part : relativePath) {
 				if (part == L"..") {
-					hasParentTraversal = true;
-					break;
+					return bit7z::FilterResult::SkipItem;
 				}
 			}
-			if (hasParentTraversal) {
-				continue;
-			}
 
-			fs::path outputPath = tempFolderPath / relativePath;
-			fs::create_directories(outputPath.parent_path(), ec);
-			if (ec) {
-				continue;
-			}
-
-			bit7z::buffer_t extracted;
-			reader.extractTo(extracted, static_cast<std::uint32_t>(item.index()));
-			if (extracted.empty()) {
-				continue;
-			}
-
-			std::ofstream output(outputPath, std::ios::binary);
-			if (!output.is_open()) {
-				continue;
-			}
-
-			output.write(reinterpret_cast<const char*>(extracted.data()), static_cast<std::streamsize>(extracted.size()));
-			if (output.good()) {
-				++extractedImageCount;
-			}
-		}
+			++extractedImageCount;
+			return bit7z::FilterResult::ProcessItem;
+		};
+		reader.extractTo(bit7z::to_tstring(outTempFolder), std::move(filterCallback));
 
 		if (extractedImageCount == 0) {
 			if (outStatus) {
