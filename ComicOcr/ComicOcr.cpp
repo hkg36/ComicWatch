@@ -17,12 +17,12 @@
 #pragma comment(lib, "opencv_core4d.lib")
 #pragma comment(lib, "opencv_imgcodecs4d.lib")
 #pragma comment(lib, "opencv_imgproc4d.lib")
-#pragma comment(lib,"zd.lib")
+#pragma comment(lib,"libzd.lib")
 #else
 #pragma comment(lib, "opencv_core4.lib")
 #pragma comment(lib, "opencv_imgcodecs4.lib")
 #pragma comment(lib, "opencv_imgproc4.lib")
-#pragma comment(lib,"z.lib")
+#pragma comment(lib,"libz.lib")
 #endif
 #ifdef _DEBUG
 #pragma comment(lib, "libcurl-d.lib")
