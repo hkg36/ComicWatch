@@ -171,14 +171,16 @@ bool ui_open_by_dialog(HWND hWnd) {
     if (selected.empty()) return false;
 
 	auto result = OpenPath(selected);
-    if (result == nullptr) return false;
-    bool ok = result->success;
-    if (ok) {
-		apply_snapshot(result->snapshot);
-        InvalidateRect(hWnd, nullptr, FALSE);
-        reset_wheel_state();
-    }
-    return ok;
+	if (result == nullptr) return false;
+	bool ok = result->success;
+	apply_snapshot(result->snapshot);
+	InvalidateRect(hWnd, nullptr, FALSE);
+	reset_wheel_state();
+	if (!ok) {
+		std::wstring message = g_state.statusMessage.empty() ? L"无法打开文件:\n" + selected : g_state.statusMessage;
+		MessageBoxW(hWnd, message.c_str(), L"打开文件失败", MB_OK | MB_ICONERROR);
+	}
+	return ok;
 }
 
 bool ui_show_next_image(HWND hWnd) {
@@ -327,7 +329,7 @@ std::wstring OpenFileDialog(HWND hWnd) {
     ofn.hwndOwner = hWnd;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = _T("Support Files\0*.zip;*.rar;*.jpg;*.jpeg;*.png;*.bmp;*.webp\0");
+    ofn.lpstrFilter = _T("Support Files\0*.zip;*.rar;*.7z;*.jpg;*.jpeg;*.png;*.bmp;*.webp\0");
     ofn.nFilterIndex = 1;
     ofn.lpstrInitialDir = initialDir.empty() ? nullptr : initialDir.c_str();
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
@@ -664,6 +666,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_DESTROY:
         save_persisted_state(hWnd);
+        CloseWorkerFiles();
         g_messageThread.stop_and_join();
         PostQuitMessage(0);
         break;

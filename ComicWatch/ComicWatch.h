@@ -34,6 +34,7 @@ std::shared_ptr<WorkerResult> ShowNextZip();
 std::shared_ptr<WorkerResult> ShowPrevZip();
 std::shared_ptr<WorkerResult> DeleteCurrentFile();
 std::shared_ptr<WorkerResult> GetSnapshot();
+void CloseWorkerFiles();
 
 class DeferHelper {
 public:

@@ -14,6 +14,8 @@
 #include <windows.h>
 #include <cwctype>
 
+#pragma comment(lib, "ole32.lib")
+
 #define BIT7Z_AUTO_FORMAT
 #include <bit7z/bit7z.hpp>
 #include <bit7z/bitarchivereader.hpp>
@@ -66,6 +68,7 @@ struct FileWorkerState {
 	bool folderOpened = false;
 	bool openedFrom7zTemp = false;
 	std::wstring source7zPath;
+	std::wstring tempFolder;
 } g_fileWorker;
 enum FileMode{
 	FileMode_None,
@@ -112,6 +115,14 @@ std::string archive_item_path_utf8(const bit7z::BitArchiveItem& item) {
 }
 
 void close_open_archive() {
+	if (!g_fileWorker.tempFolder.empty()) {
+		std::error_code ec;
+		fs::remove_all(g_fileWorker.tempFolder, ec);
+		if (ec) {
+			OutputDebugStringW((L"无法清理7z临时目录: " + g_fileWorker.tempFolder + L"\n").c_str());
+		}
+		g_fileWorker.tempFolder.clear();
+	}
 	if (g_worker.archiveOpened) {
 		g_worker.currentImage.release();
 		g_worker.archiveReader.reset();
@@ -313,18 +324,23 @@ bool extract_7z_images_to_temp_folder(const std::wstring& archivePath, std::wstr
 		return false;
 	}
 
-	outTempFolder = (tempRoot / fs::path(archivePath).filename()).wstring();
-	fs::path tempFolderPath(outTempFolder);
-	if (fs::exists(tempFolderPath, ec) && fs::is_directory(tempFolderPath, ec)) {
-		return true;
-	}
-
-	if (!fs::create_directories(tempFolderPath, ec) && ec) {
+	GUID id{};
+	wchar_t idString[39]{};
+	if (FAILED(CoCreateGuid(&id)) || StringFromGUID2(id, idString, _countof(idString)) == 0) {
 		if (outStatus) {
-			*outStatus = L"创建临时目录失败:\n" + outTempFolder;
+			*outStatus = L"无法生成7z临时目录名称";
 		}
 		return false;
 	}
+	fs::path tempFolderPath = tempRoot / (std::wstring(L"ComicWatch-") + idString);
+	if (!fs::create_directory(tempFolderPath, ec)) {
+		if (outStatus) {
+			*outStatus = L"创建临时目录失败:\n" + tempFolderPath.wstring();
+		}
+		return false;
+	}
+	outTempFolder = tempFolderPath.wstring();
+	g_fileWorker.tempFolder = outTempFolder;
 
 	try {
 		const auto& library = get_bit7z_library();
@@ -462,8 +478,9 @@ void fill_snapshot(WorkerSnapshot& snapshot) {
         snapshot.imageIndex = g_fileWorker.imageIndex;
         snapshot.currentImage = g_fileWorker.currentImage;
         snapshot.statusMessage = g_fileWorker.statusMessage;
-        snapshot.currentFolder = g_fileWorker.currentFolder;
-        snapshot.currentFilePath = (g_fileWorker.imageIndex >= 0 && g_fileWorker.imageIndex < (int)g_fileWorker.imageFiles.size()) ? g_fileWorker.imageFiles[g_fileWorker.imageIndex] : L"";
+        snapshot.currentFolder = g_fileWorker.openedFrom7zTemp ? fs::path(g_fileWorker.source7zPath).parent_path().wstring() : g_fileWorker.currentFolder;
+        snapshot.currentFilePath = g_fileWorker.openedFrom7zTemp ? g_fileWorker.source7zPath :
+            (g_fileWorker.imageIndex >= 0 && g_fileWorker.imageIndex < (int)g_fileWorker.imageFiles.size()) ? g_fileWorker.imageFiles[g_fileWorker.imageIndex] : L"";
     }
 }
 
@@ -942,8 +959,8 @@ void delete_current_folder() {
 
 	if (g_fileWorker.openedFrom7zTemp && !g_fileWorker.source7zPath.empty()) {
 		std::wstring deletingPath = g_fileWorker.source7zPath;
-		close_open_archive();
 		if (!move_file_to_recycle_bin(deletingPath)) return;
+		close_open_archive();
 		g_fileWorker.currentImage.release();
 		g_fileWorker.imageFiles.clear();
 		g_fileWorker.imageIndex = -1;
@@ -972,34 +989,48 @@ std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
 	if (is_supported_archive_file(filePath)) {
 		if (is_7z_archive_file(filePath)) {
 			return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
+				close_open_archive();
 				mode = FileMode_Folder;
 				std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
 				std::wstring tempFolder;
 				std::wstring status;
 				if (!extract_7z_images_to_temp_folder(filePath, tempFolder, &status)) {
+					close_open_archive();
 					g_fileWorker.currentImage.release();
 					g_fileWorker.imageFiles.clear();
 					g_fileWorker.imageIndex = -1;
 					g_fileWorker.preloadCache.clear();
-					g_fileWorker.openedFrom7zTemp = true;
-					g_fileWorker.source7zPath = filePath;
-					g_fileWorker.currentFolder = tempFolder;
-					g_fileWorker.statusMessage = status;
-					result->success = false;
-					fill_snapshot(result->snapshot);
+					g_fileWorker.openedFrom7zTemp = false;
+					g_fileWorker.source7zPath.clear();
+					mode = FileMode_None;
+					result->snapshot.currentFolder = fs::path(filePath).parent_path().wstring();
+					result->snapshot.statusMessage = status;
 					return result;
 				}
 
 				g_fileWorker.openedFrom7zTemp = true;
 				g_fileWorker.source7zPath = filePath;
 				scan_images_in_folder(tempFolder);
-				if (!g_fileWorker.imageFiles.empty()) {
-					g_fileWorker.imageIndex = 0;
-					result->success = load_current_image_file();
+				g_fileWorker.badImageEntries.clear();
+				g_fileWorker.preloadCache.clear();
+				for (int i = 0; i < (int)g_fileWorker.imageFiles.size(); ++i) {
+					g_fileWorker.imageIndex = i;
+					if (load_current_image_file()) {
+						result->success = true;
+						break;
+					}
 				}
-				else {
-					result->success = false;
-					g_fileWorker.statusMessage = L"当前7z临时目录内无图片文件:\n" + tempFolder;
+				if (!result->success) {
+					close_open_archive();
+					g_fileWorker.currentImage.release();
+					g_fileWorker.imageFiles.clear();
+					g_fileWorker.imageIndex = -1;
+					g_fileWorker.openedFrom7zTemp = false;
+					g_fileWorker.source7zPath.clear();
+					mode = FileMode_None;
+					result->snapshot.currentFolder = fs::path(filePath).parent_path().wstring();
+					result->snapshot.statusMessage = L"7z压缩包内无可读取图片:\n" + filePath;
+					return result;
 				}
 				fill_snapshot(result->snapshot);
 				PreloadNeighbors();
@@ -1008,6 +1039,7 @@ std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
 		}
 
 		return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
+			close_open_archive();
 			mode = FileMode_Zip;
 			std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
 			fs::path selectedPath(filePath);
@@ -1026,6 +1058,13 @@ std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
 					}
 				}
 			}
+			if (!result->success) {
+				close_open_archive();
+				mode = FileMode_None;
+				result->snapshot.currentFolder = folder;
+				result->snapshot.statusMessage = L"无法打开压缩包或压缩包内无可读取图片:\n" + filePath;
+				return result;
+			}
 			fill_snapshot(result->snapshot);
 			PreloadNeighbors();
 			return result;
@@ -1033,12 +1072,15 @@ std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
 	}
 	else {
 		return g_messageThread.send([filePath] -> std::shared_ptr<WorkerResult> {
+			close_open_archive();
 			mode = FileMode_Folder;
 			std::shared_ptr<WorkerResult> result = std::make_shared<WorkerResult>();
 			fs::path selectedPath(filePath);
 			std::wstring folder = selectedPath.parent_path().wstring();
 			g_fileWorker.openedFrom7zTemp = false;
 			g_fileWorker.source7zPath.clear();
+			g_fileWorker.badImageEntries.clear();
+			g_fileWorker.preloadCache.clear();
 			scan_images_in_folder(folder);
 			if (!g_fileWorker.imageFiles.empty()) {
 				g_fileWorker.imageIndex = 0;
@@ -1051,6 +1093,12 @@ std::shared_ptr<WorkerResult> OpenPath(const std::wstring& filePath) {
 			else {
 				result->success = false;
 				g_fileWorker.statusMessage = L"当前文件夹内无图片文件:\n" + folder;
+			}
+			if (!result->success) {
+				mode = FileMode_None;
+				result->snapshot.currentFolder = folder;
+				result->snapshot.statusMessage = g_fileWorker.statusMessage;
+				return result;
 			}
 			fill_snapshot(result->snapshot);
 			PreloadNeighbors();
@@ -1160,10 +1208,14 @@ std::shared_ptr<WorkerResult> GetSnapshot() {
         return result;
         });
 }
+void CloseWorkerFiles() {
+    g_messageThread.send([] { close_open_archive(); });
+}
+
 void PreloadNeighbors() {
     if (mode == FileMode_Zip) {
         g_messageThread.post_idle([]() {
-            if (refresh_preload_neighbors()) {
+            if (mode == FileMode_Zip && refresh_preload_neighbors()) {
                 PreloadNeighbors();
             }
             });
@@ -1171,7 +1223,7 @@ void PreloadNeighbors() {
     else if (mode == FileMode_Folder)
     {
         g_messageThread.post_idle([]() {
-            if (refresh_preload_neighbors_file()) {
+            if (mode == FileMode_Folder && refresh_preload_neighbors_file()) {
                 PreloadNeighbors();
             }
             });
